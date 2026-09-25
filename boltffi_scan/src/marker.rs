@@ -83,6 +83,11 @@ impl Marker {
         match marker_name(attr).as_deref() {
             Some("data") => Self::from_data(attr).map(Some),
             Some("custom_ffi") => Self::empty(attr, Self::CustomFfi).map(Some),
+            Some("error")
+                if attr.path().segments.len() == 1 && !matches!(attr.meta, syn::Meta::Path(_)) =>
+            {
+                Ok(None)
+            }
             Some("error") => Self::empty(attr, Self::Error).map(Some),
             Some("export") => Self::from_export(attr).map(Some),
             Some("skip") => Self::empty(attr, Self::Skip).map(Some),
@@ -307,6 +312,34 @@ mod tests {
         assert_eq!(
             Marker::detect(&enum_attrs("#[boltffi::error] enum E { Io, Parse }")),
             Ok(Some(Marker::Error))
+        );
+    }
+
+    #[test]
+    fn ignores_thiserror_display_attributes() {
+        assert_eq!(
+            Marker::detect(&struct_attrs(
+                r#"#[derive(thiserror::Error)] #[error("failed: {0}")] struct E(String);"#
+            )),
+            Ok(None)
+        );
+        assert_eq!(
+            Marker::detect(&enum_attrs(
+                r#"#[derive(thiserror::Error)] enum E { #[error("failed")] Failed }"#
+            )),
+            Ok(None)
+        );
+        assert_eq!(
+            Marker::detect(&struct_attrs("#[error(transparent)] struct E(String);")),
+            Ok(None)
+        );
+        assert_eq!(
+            Marker::detect(&struct_attrs(
+                "#[boltffi::error(transparent)] struct E(String);"
+            )),
+            Err(ScanError::InvalidMarker {
+                attribute: "boltffi::error(transparent)".to_owned()
+            })
         );
     }
 

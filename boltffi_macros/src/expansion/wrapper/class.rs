@@ -1,8 +1,8 @@
 use boltffi_ast::{ClassDef, MethodDef};
 use boltffi_binding::{
-    ClassDecl, ClassId, ClassThreadSafety, Decl, ExecutionDecl, ExportedCallable, HandleTarget,
-    IncomingParam, IntoRust, Native, NativeSymbol, OutOfRust, ParamPlan, Receive, ReturnPlan,
-    Wasm32, native, wasm32,
+    ClassDecl, ClassId, ClassThreadSafety, CodecNode, Decl, ExecutionDecl, ExportedCallable,
+    HandleTarget, IncomingParam, IntoRust, Native, NativeSymbol, OutOfRust, ParamPlan, Receive,
+    ReturnPlan, Wasm32, native, wasm32,
 };
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
@@ -32,10 +32,23 @@ struct ClassOwner<'lowered, C> {
 struct ClassHandleOperations {
     new: bool,
     take: bool,
+    wire: bool,
     shared: bool,
     mutable: bool,
     retained_shared: bool,
     retained_mutable: bool,
+}
+fn codec_mentions_class(codec: &CodecNode, class_id: ClassId) -> bool {
+    match codec {
+        CodecNode::ClassHandle(id) => *id == class_id,
+        CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
+            codec_mentions_class(inner, class_id)
+        }
+        CodecNode::Map { key, value, .. } => {
+            codec_mentions_class(key, class_id) || codec_mentions_class(value, class_id)
+        }
+        _ => false,
+    }
 }
 
 impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Class<'expansion, 'lowered, S> {
@@ -67,6 +80,32 @@ impl<'expansion, 'lowered> Class<'expansion, 'lowered, Native> {
         let handle_type = class_names.handle();
         let retained_handle_type = class_names.retained_handle();
         let operations = ClassHandleOperations::new(binding, self.expansion);
+        let wire = operations.wire.then(|| quote! {
+            impl ::boltffi::__private::wire::WireEncode for #class_type {
+                fn is_fixed_size() -> bool { true }
+                fn fixed_size() -> Option<usize> { Some(8) }
+                fn wire_size(&self) -> usize { 8 }
+                fn encode_to(&self, _: &mut [u8]) -> usize {
+                    panic!("encoding a borrowed class handle requires an owned wire value")
+                }
+            }
+            impl ::boltffi::__private::wire::WireDecode for #class_type {
+                fn decode_from(buffer: &[u8]) -> ::boltffi::__private::wire::DecodeResult<Self> {
+                    let (raw, used) =
+                        <u64 as ::boltffi::__private::wire::WireDecode>::decode_from(buffer)?;
+                    if raw == 0 {
+                        return Err(::boltffi::__private::wire::DecodeError::InvalidValue(
+                            ::boltffi::__private::wire::InvalidWireValue::ClassHandle
+                        ));
+                    }
+                    let value = unsafe { #handle_type::take(raw as usize as *mut #handle_type) }
+                        .ok_or(::boltffi::__private::wire::DecodeError::InvalidValue(
+                            ::boltffi::__private::wire::InvalidWireValue::ClassHandle
+                        ))?;
+                    Ok((value, used))
+                }
+            }
+        });
         let handle = self.handle(&class_type, &handle_type, &retained_handle_type, operations);
         let thread_safety = self.thread_safety(binding, &class, &class_type);
         let release = self.release(binding.release(), binding.handle(), &handle_type)?;
@@ -84,6 +123,7 @@ impl<'expansion, 'lowered> Class<'expansion, 'lowered, Native> {
         .render()?;
 
         Ok(quote! {
+            #wire
             #handle
             #thread_safety
             #release
@@ -526,10 +566,11 @@ impl ClassHandleOperations {
             matches!(declaration, Decl::Record(record)
                 if matches!(record.as_ref(), boltffi_binding::RecordDecl::Encoded(record)
                     if record.fields().iter().any(|field|
-                        matches!(field.codec().write().root(), boltffi_binding::CodecNode::ClassHandle(id) if *id == class_id))))
+                        codec_mentions_class(field.codec().write().root(), class_id))))
         }) {
             self.take = true;
             self.new = true;
+            self.wire = true;
         }
         self
     }

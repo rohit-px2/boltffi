@@ -65,7 +65,7 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Value<'expansion, '
             matches!(declaration, Decl::Record(record)
                 if matches!(record.as_ref(), RecordDecl::Encoded(record)
                     if record.id() == *id && record.fields().iter().any(|field|
-                        matches!(field.codec().write().root(), CodecNode::ClassHandle(_)))))
+                        super::contains_class_handle(field.codec().write().root()))))
         })
     }
 

@@ -30,6 +30,7 @@ pub enum InvalidWireValue {
     DateTimeUtc,
     CustomConversion,
     DuplicateMapKey,
+    ClassHandle,
 }
 
 impl std::fmt::Display for InvalidWireValue {
@@ -45,6 +46,7 @@ impl std::fmt::Display for InvalidWireValue {
             Self::Url => write!(formatter, "Url"),
             Self::DateTimeUtc => write!(formatter, "DateTimeUtc"),
             Self::CustomConversion => write!(formatter, "CustomConversion"),
+            Self::ClassHandle => write!(formatter, "ClassHandle"),
             Self::DuplicateMapKey => write!(formatter, "DuplicateMapKey"),
         }
     }

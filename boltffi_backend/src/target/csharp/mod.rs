@@ -1227,6 +1227,35 @@ mod tests {
     }
 
     #[test]
+    fn csharp_target_renders_class_handles_in_encoded_records() {
+        let bindings = bindings(
+            r#"
+            pub struct Token;
+
+            #[export]
+            impl Token {
+                pub fn new() -> Self { Self }
+            }
+
+            #[data]
+            pub struct Response {
+                pub token: Token,
+            }
+
+            #[export]
+            pub fn respond() -> Response { Response { token: Token } }
+            "#,
+        );
+        let output = target(CSharpHost::new())
+            .render(&bindings)
+            .expect("record with class handle should render");
+        let record = file(&output, "Response.cs");
+        assert!(record.contains("new Token(reader.ReadU64())"));
+        assert!(record.contains("writer.WriteU64(this.Token.TakeHandle());"));
+        assert!(output.diagnostics().is_empty());
+    }
+
+    #[test]
     fn csharp_target_renders_async_class_new_as_static_factory() {
         let bindings = bindings(
             r#"

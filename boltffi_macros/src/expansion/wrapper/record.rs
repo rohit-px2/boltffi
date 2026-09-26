@@ -470,6 +470,30 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> EncodedField<'expan
                 initializer: field,
             });
         }
+        if encoded::contains_class_handle(codec) {
+            let owned_encode_to =
+                owned_class_codec(codec, &self.source.type_expr, quote! { #field })?;
+            let decode_from = self.decode_from(&field, &decoded, &used, &rust_type, codec)?;
+            return Ok(EncodedFieldTokens {
+                fixed_size_check: quote! {
+                    <#rust_type as ::boltffi::__private::wire::WireEncode>::is_fixed_size()
+                },
+                fixed_size: quote! {
+                    <#rust_type as ::boltffi::__private::wire::WireEncode>::fixed_size()
+                        .unwrap_or(0)
+                },
+                wire_size: quote! {
+                    ::boltffi::__private::wire::WireEncode::wire_size(&self.#field)
+                },
+                owned_encode_to,
+                class_handle: true,
+                encode_to: quote! {
+                    panic!("encoding borrowed class handle collections requires an owned wire value");
+                },
+                decode_from,
+                initializer: field,
+            });
+        }
         encoded::require_runtime_wire(codec)?;
         rust_api::IncomingEncodedType::new(&self.source.type_expr).require_supported()?;
         let conversion = encoded::BorrowedOutgoing::new(codec, self.expansion);
@@ -636,6 +660,90 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> EncodedField<'expan
             __boltffi_offset += #used;
             let #field #type_annotation = #value;
         })
+    }
+}
+
+fn owned_class_codec(
+    codec: &CodecNode,
+    ty: &TypeExpr,
+    value: TokenStream,
+) -> Result<TokenStream, Error> {
+    match (codec, ty) {
+        (CodecNode::ClassHandle(_), TypeExpr::Class { .. }) => {
+            let ty = rust_api::TypeTokens::new(ty)?.into_type();
+            let handle = names::Class::from_type_path(&ty)?.handle();
+            Ok(quote! {
+                let __boltffi_raw =
+                    crate::__boltffi_expansion::#handle::new(#value) as usize as u64;
+                __boltffi_offset += ::boltffi::__private::wire::WireEncode::encode_to(
+                    &__boltffi_raw, &mut buffer[__boltffi_offset..]
+                );
+            })
+        }
+        (CodecNode::Optional(inner), TypeExpr::Option(inner_ty)) => {
+            let some = owned_class_codec(inner, inner_ty, quote! { __boltffi_item })?;
+            Ok(quote! {
+                match #value {
+                    Some(__boltffi_item) => {
+                        buffer[__boltffi_offset] = 1;
+                        __boltffi_offset += 1;
+                        #some
+                    }
+                    None => {
+                        buffer[__boltffi_offset] = 0;
+                        __boltffi_offset += 1;
+                    }
+                }
+            })
+        }
+        (CodecNode::Sequence { element, .. }, TypeExpr::Vec(inner_ty)) => {
+            let item = owned_class_codec(element, inner_ty, quote! { __boltffi_item })?;
+            Ok(quote! {
+                {
+                    let __boltffi_items = #value;
+                    let __boltffi_count =
+                        u32::try_from(__boltffi_items.len()).expect("wire collection exceeds u32");
+                    __boltffi_offset += ::boltffi::__private::wire::WireEncode::encode_to(
+                        &__boltffi_count, &mut buffer[__boltffi_offset..]
+                    );
+                    for __boltffi_item in __boltffi_items {
+                        #item
+                    }
+                }
+            })
+        }
+        (
+            CodecNode::Map {
+                key, value: inner, ..
+            },
+            TypeExpr::Map {
+                value: value_ty, ..
+            },
+        ) if !encoded::contains_class_handle(key) => {
+            let item = owned_class_codec(inner, value_ty, quote! { __boltffi_item })?;
+            Ok(quote! {
+                {
+                    let __boltffi_items = #value;
+                    let __boltffi_count =
+                        u32::try_from(__boltffi_items.len()).expect("wire map exceeds u32");
+                    __boltffi_offset += ::boltffi::__private::wire::WireEncode::encode_to(
+                        &__boltffi_count, &mut buffer[__boltffi_offset..]
+                    );
+                    for (__boltffi_key, __boltffi_item) in __boltffi_items {
+                        __boltffi_offset += ::boltffi::__private::wire::WireEncode::encode_to(
+                            &__boltffi_key, &mut buffer[__boltffi_offset..]
+                        );
+                        #item
+                    }
+                }
+            })
+        }
+        _ if !encoded::contains_class_handle(codec) => Ok(quote! {
+            __boltffi_offset += ::boltffi::__private::wire::WireEncode::encode_to(
+                &#value, &mut buffer[__boltffi_offset..]
+            );
+        }),
+        _ => Err(Error::UnsupportedExpansion("class handle collection shape")),
     }
 }
 

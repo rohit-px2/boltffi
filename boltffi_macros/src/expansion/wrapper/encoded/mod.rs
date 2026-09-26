@@ -14,6 +14,22 @@ pub fn require_runtime_wire(codec: &CodecNode) -> Result<(), Error> {
     RuntimeWireCodec.require_supported(codec)
 }
 
+pub(super) fn contains_class_handle(codec: &CodecNode) -> bool {
+    match codec {
+        CodecNode::ClassHandle(_) => true,
+        CodecNode::Optional(inner) | CodecNode::Sequence { element: inner, .. } => {
+            contains_class_handle(inner)
+        }
+        CodecNode::Map { key, value, .. } => {
+            contains_class_handle(key) || contains_class_handle(value)
+        }
+        CodecNode::Tuple(elements) => elements.iter().any(contains_class_handle),
+        CodecNode::Result { ok, err } => contains_class_handle(ok) || contains_class_handle(err),
+        CodecNode::Custom { representation, .. } => contains_class_handle(representation),
+        _ => false,
+    }
+}
+
 struct RuntimeWireCodec;
 
 impl RuntimeWireCodec {

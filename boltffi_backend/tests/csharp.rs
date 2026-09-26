@@ -132,6 +132,34 @@ fn csharp_record_transfers_nonempty_class_to_rust() {
         }
         #[data]
         pub struct Response { pub token: Token, pub marker: i32 }
+        #[data]
+        pub struct Batch { pub tokens: Vec<Token>, pub maybe: Option<Token> }
+        #[data]
+        pub struct Keyed { pub tokens: std::collections::BTreeMap<String, Token> }
+        #[export]
+        pub fn consume_keyed(keyed: Keyed) -> i32 {
+            keyed.tokens.get("first").map_or(0, |token| token.value)
+                + keyed.tokens.get("second").map_or(0, |token| token.value)
+        }
+        #[export]
+        pub fn make_keyed() -> Keyed {
+            Keyed { tokens: std::collections::BTreeMap::from([
+                ("first".to_string(), Token { value: 40 }),
+                ("second".to_string(), Token { value: 50 }),
+            ]) }
+        }
+        #[export]
+        pub fn consume_batch(batch: Batch) -> i32 {
+            batch.tokens.iter().map(|token| token.value).sum::<i32>()
+                + batch.maybe.as_ref().map_or(0, |token| token.value)
+        }
+        #[export]
+        pub fn make_batch() -> Batch {
+            Batch {
+                tokens: vec![Token { value: 10 }, Token { value: 20 }],
+                maybe: Some(Token { value: 30 }),
+            }
+        }
         #[export]
         pub fn consume(response: Response) -> i32 { response.token.value + response.marker }
         #[export]
@@ -148,6 +176,22 @@ fn csharp_record_transfers_nonempty_class_to_rust() {
                     boltffi::__private::wire::InvalidWireValue::ClassHandle
                 ))
             )
+        }
+        #[export]
+        pub fn failed_collection_decode_releases_handles() -> bool {
+            let before = drop_count();
+            let handle = __boltffi_expansion::__BoltffiTokenHandle::new(Token { value: 99 });
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&2u32.to_le_bytes());
+            bytes.extend_from_slice(&(handle as usize as u64).to_le_bytes());
+            bytes.extend_from_slice(&0u64.to_le_bytes());
+            let rejected = matches!(
+                boltffi::__private::wire::decode::<Vec<Token>>(&bytes),
+                Err(boltffi::__private::wire::DecodeError::InvalidValue(
+                    boltffi::__private::wire::InvalidWireValue::ClassHandle
+                ))
+            );
+            rejected && drop_count() == before + 1
         }
     "#;
     let bindings = bindings(source);
@@ -398,6 +442,40 @@ returned.Token.Dispose();
 returned.Token.Dispose();
 if (global::Demo.Demo.DropCount() != 2) throw new Exception("Rust token was not released exactly once");
 if (!global::Demo.Demo.RejectsZeroHandle()) throw new Exception("Rust accepted a null class handle");
+var one = new Token(1);
+var two = new Token(2);
+var three = new Token(3);
+if (global::Demo.Demo.ConsumeBatch(new Batch(new[] { one, two }, three)) != 6)
+    throw new Exception("Rust did not receive collection handles");
+if (one.Handle != 0 || two.Handle != 0 || three.Handle != 0)
+    throw new Exception("C# retained collection handles");
+one.Dispose(); two.Dispose(); three.Dispose();
+if (global::Demo.Demo.DropCount() != 5) throw new Exception("Rust did not drop collection handles");
+var batch = global::Demo.Demo.MakeBatch();
+if (batch.Tokens.Length != 2 || batch.Tokens[0].Value() != 10 ||
+    batch.Tokens[1].Value() != 20 || batch.Maybe?.Value() != 30)
+    throw new Exception("C# did not receive collection handles");
+if (global::Demo.Demo.DropCount() != 5) throw new Exception("Rust dropped returned collection early");
+foreach (var item in batch.Tokens) item.Dispose();
+batch.Maybe?.Dispose();
+if (global::Demo.Demo.DropCount() != 8) throw new Exception("returned handles not released once");
+var first = new Token(4);
+var second = new Token(5);
+var keyed = new Keyed(new System.Collections.Generic.Dictionary<string, Token> {
+    ["first"] = first, ["second"] = second
+});
+if (global::Demo.Demo.ConsumeKeyed(keyed) != 9) throw new Exception("Rust did not receive map handles");
+if (first.Handle != 0 || second.Handle != 0 || global::Demo.Demo.DropCount() != 10)
+    throw new Exception("map handles were not transferred");
+var returnedMap = global::Demo.Demo.MakeKeyed();
+if (returnedMap.Tokens["first"].Value() != 40 || returnedMap.Tokens["second"].Value() != 50)
+    throw new Exception("C# did not receive map handles");
+if (global::Demo.Demo.DropCount() != 10) throw new Exception("Rust dropped map handles early");
+foreach (var item in returnedMap.Tokens.Values) item.Dispose();
+if (global::Demo.Demo.DropCount() != 12) throw new Exception("map handles not released once");
+if (!global::Demo.Demo.FailedCollectionDecodeReleasesHandles())
+    throw new Exception("failed collection decode leaked or accepted a handle");
+if (global::Demo.Demo.DropCount() != 13) throw new Exception("failed decode drop count mismatch");
 "#,
     )
     .expect("write C# handoff assertions");

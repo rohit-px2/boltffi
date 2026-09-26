@@ -69,6 +69,13 @@ impl<'context, 'bindings> Reader<'context, 'bindings> {
             TypeFragment::new(format!("global::{namespace}.{ty}"))
         }))
     }
+
+    fn class_type(&self, id: ClassId) -> Result<TypeFragment> {
+        let ty = type_name::class(id, self.context)?;
+        Ok(self.namespace.as_ref().map_or(ty.clone(), |namespace| {
+            TypeFragment::new(format!("global::{namespace}.{ty}"))
+        }))
+    }
 }
 
 impl ReadExpression {
@@ -135,8 +142,12 @@ impl CodecRead for Reader<'_, '_> {
         ))
     }
 
-    fn class_handle(&mut self, _: ClassId) -> Self::Expr {
-        super::super::unsupported("class handle codec read")
+    fn class_handle(&mut self, id: ClassId) -> Self::Expr {
+        let ty = self.class_type(id)?;
+        Ok(ReadExpression::new(
+            Expression::new(format!("new {ty}({}.ReadU64())", self.name)),
+            ty,
+        ))
     }
 
     fn callback_handle(&mut self, _: CallbackId) -> Self::Expr {

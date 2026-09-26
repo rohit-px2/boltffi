@@ -116,8 +116,12 @@ impl CodecWrite for Writer<'_, '_> {
         vec![self.encodable(value)]
     }
 
-    fn class_handle(&mut self, _: ClassId, _: &ValueRef) -> Vec<Self::Stmt> {
-        vec![super::super::unsupported("class handle codec write")]
+    fn class_handle(&mut self, _: ClassId, value: &ValueRef) -> Vec<Self::Stmt> {
+        vec![
+            self.value(value).map(|value| {
+                Statement::new(format!("{}.WriteU64({value}.TakeHandle());", self.name))
+            }),
+        ]
     }
 
     fn callback_handle(&mut self, _: CallbackId, _: &ValueRef) -> Vec<Self::Stmt> {

@@ -184,7 +184,7 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Class<'expansion, '
     ) -> TokenStream {
         let new = operations.new.then(|| {
             quote! {
-                fn new(value: #class) -> *mut Self {
+                pub(crate) fn new(value: #class) -> *mut Self {
                     Box::into_raw(Box::new(Self {
                         value: ::core::cell::UnsafeCell::new(value),
                         references: ::std::sync::atomic::AtomicUsize::new(1),
@@ -195,7 +195,7 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Class<'expansion, '
         });
         let take = operations.take.then(|| {
             quote! {
-                unsafe fn take(handle: *mut Self) -> Option<#class> {
+                pub(crate) unsafe fn take(handle: *mut Self) -> Option<#class> {
                     let state = unsafe { handle.as_ref()? };
                     state
                         .released
@@ -304,7 +304,7 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Class<'expansion, '
             }
         });
         quote! {
-            struct #handle_type {
+            pub(crate) struct #handle_type {
                 value: ::core::cell::UnsafeCell<#class>,
                 references: ::std::sync::atomic::AtomicUsize,
                 released: ::std::sync::atomic::AtomicBool,
@@ -468,6 +468,7 @@ impl ClassHandleOperations {
             )
             .with_class_receivers(class)
             .with_class_streams(class, expansion)
+            .with_encoded_records(class.id(), expansion)
     }
 
     const fn shared(self) -> bool {
@@ -512,6 +513,23 @@ impl ClassHandleOperations {
             matches!(declaration, Decl::Stream(stream) if stream.owner() == Some(class.id()))
         }) {
             self.shared = true;
+        }
+        self
+    }
+
+    fn with_encoded_records<'lowered, S: boltffi_binding::SurfaceLower>(
+        mut self,
+        class_id: ClassId,
+        expansion: &Expansion<'lowered, S>,
+    ) -> Self {
+        if expansion.bindings().decls().iter().any(|declaration| {
+            matches!(declaration, Decl::Record(record)
+                if matches!(record.as_ref(), boltffi_binding::RecordDecl::Encoded(record)
+                    if record.fields().iter().any(|field|
+                        matches!(field.codec().write().root(), boltffi_binding::CodecNode::ClassHandle(id) if *id == class_id))))
+        }) {
+            self.take = true;
+            self.new = true;
         }
         self
     }

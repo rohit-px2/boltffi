@@ -259,7 +259,7 @@ mod tests {
 
         let source = file(&output, "demo/lib/demo.dart");
         assert!(source.contains("int add(int left, int right)"));
-        assert!(source.contains("external int _f$boltffi_function_demo_api_add"));
+        assert!(source.contains("external int _f$boltffi_function_8demo_api3add"));
         assert!(source.contains("void notify(int value)"));
         assert!(source.contains("_$$BoltFFIStatus"));
         assert_eq!(source.matches("symbol: 'boltffi_free_buf'").count(), 1);
@@ -697,17 +697,17 @@ mod tests {
             source.contains("if (c > 127)"),
             "ASCII writeString fast path must stay in the prelude"
         );
-        assert!(source.contains("BoltFFIDartShim_demo_api_transformer_register"));
+        assert!(source.contains("BoltFFIDartShim_8demo_api11Transformer_register"));
         assert!(
             source.contains("_l$out.value = _m$transform("),
             "scalar listener write-back must use Pointer.value"
         );
         assert!(
-            source.contains("BoltFFIDartShim_demo_api_transformer_transform"),
+            source.contains("BoltFFIDartShim_8demo_api11Transformer_transform"),
             "sync methods stay on the dual-path shim"
         );
         assert!(
-            !source.contains("BoltFFIDartShim_demo_api_transformer_load"),
+            !source.contains("BoltFFIDartShim_8demo_api11Transformer_load"),
             "async methods must not be shimmed (wait-on-isolate deadlocks)"
         );
         assert!(output.diagnostics().is_empty());
@@ -738,7 +738,7 @@ mod tests {
         );
         // Prefixed from `boltffi_register_callback_<path>`, not the trait leaf.
         assert!(
-            source.contains("BoltFFIDartShim_demo_api_http_client_register"),
+            source.contains("BoltFFIDartShim_8demo_api10HTTPClient_register"),
             "shim symbols must include the full callback identity"
         );
         assert!(!source.contains("BoltFFIDartShim_HTTPClient_register"));

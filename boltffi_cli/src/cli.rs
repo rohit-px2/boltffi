@@ -11,7 +11,7 @@ use crate::commands::init::InitOptions;
 use crate::commands::pack::{
     PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCOptions, PackCSharpOptions,
     PackCommand, PackDartOptions, PackExecutionOptions, PackJavaOptions, PackKmpOptions,
-    PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
+    PackPythonOptions, PackRubyOptions, PackWasmOptions, check_java_packaging_prereqs,
 };
 use crate::commands::verify::VerifyOptions;
 use crate::commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
@@ -198,6 +198,8 @@ pub(crate) enum GenerateTargetArg {
     Csharp,
     #[value(help = "Generate experimental C bindings (sync surface)")]
     C,
+    #[value(help = "Generate experimental Ruby bindings (C extension)")]
+    Ruby,
     #[value(help = "Generate all bindings")]
     All,
 }
@@ -380,6 +382,20 @@ pub(crate) enum PackTargetArg {
         #[arg(long, help = "Enable experimental targets/features")]
         experimental: bool,
     },
+    #[command(
+        about = "Build + package Ruby gem sources (experimental)",
+        long_about = "Build + package Ruby gem sources.\n\nOutputs:\n  - Gem sources: {targets.ruby.output}\n  - Static library: {targets.ruby.output}/ext/<stem>/lib<library>.a\n\nRun `gem build <gem>.gemspec` in the output directory to build the gem.\n"
+    )]
+    Ruby {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -496,6 +512,7 @@ pub(crate) fn execute_command(
                         GenerateTargetArg::Python => GenerateTarget::Python,
                         GenerateTargetArg::Csharp => GenerateTarget::CSharp,
                         GenerateTargetArg::C => GenerateTarget::C,
+                        GenerateTargetArg::Ruby => GenerateTarget::Ruby,
                         GenerateTargetArg::All => GenerateTarget::All,
                     })
                     .unwrap_or(GenerateTarget::All),
@@ -663,6 +680,20 @@ pub(crate) fn execute_command(
                     no_build,
                     experimental,
                 } => PackCommand::C(PackCOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        deny_skipped,
+                        cargo_args,
+                    ),
+                    experimental,
+                }),
+                PackTargetArg::Ruby {
+                    release,
+                    no_build,
+                    experimental,
+                } => PackCommand::Ruby(PackRubyOptions {
                     execution: pack_execution_options(
                         release,
                         regenerate,

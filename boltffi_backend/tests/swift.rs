@@ -452,7 +452,7 @@ fn swift_target_passes_borrowed_direct_records_by_pointer() {
 
     assert!(rendered.contains("public func pointSum(point: Point) -> Double"));
     assert!(rendered.contains("var boltffiPointStorage = point.cValue"));
-    assert!(rendered.contains("boltffi_function_demo_point_sum(&boltffiPointStorage)"));
+    assert!(rendered.contains("boltffi_function_4demo9point_sum(&boltffiPointStorage)"));
 }
 
 #[test]
@@ -470,7 +470,7 @@ fn swift_target_writes_mutable_direct_record_receivers_back() {
     assert!(rendered.contains("var boltffiPointOut: ___Point = self.cValue"));
     assert!(
         rendered.contains(
-            "boltffi_method_record_demo_point_move_by(self.cValue, &boltffiPointOut, dx)"
+            "boltffi_method_record_4demo5Point7move_by(self.cValue, &boltffiPointOut, dx)"
         )
     );
     assert!(rendered.contains("self = Point(fromC: boltffiPointOut)"));

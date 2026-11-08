@@ -11,10 +11,10 @@ use boltffi_backend::target::kotlin::{
     KotlinApiStyle as BackendKotlinApiStyle, KotlinDesktopLoader as BackendKotlinDesktopLoader,
     KotlinFactoryStyle as BackendKotlinFactoryStyle,
 };
+use boltffi_backend::target::ruby::RubyCExtHost;
 use boltffi_backend::{CoverageMode, GeneratedOutput};
 use boltffi_bindgen::generate::{Generation, GenerationError};
 use boltffi_bindgen::target::Target;
-use boltffi_binding::BindingMetadataSurface;
 
 use crate::build::BindingExpansion;
 use crate::cargo::Cargo;
@@ -109,6 +109,7 @@ pub fn run_generation(config: &Config, options: &GenerateOptions) -> Result<()> 
         GenerateTarget::CSharp => generate_csharp(config, options),
         GenerateTarget::Header => generate_header(config, options),
         GenerateTarget::C => generate_c(config, options),
+        GenerateTarget::Ruby => generate_ruby(config, options),
         other => Err(CliError::CommandFailed {
             command: format!("cannot directly generate {}", target_label(other)),
             status: None,
@@ -192,7 +193,7 @@ fn generate_typescript(config: &Config, options: &GenerateOptions) -> Result<()>
 
     expansion
         .generation()
-        .binding_surface(BindingMetadataSurface::Wasm32)
+        .triple(config.wasm_triple())
         .coverage_mode(CoverageMode::Partial)
         .typescript_module(config.wasm_typescript_module_name())
         .typescript_runtime_package(config.wasm_runtime_package())
@@ -500,6 +501,70 @@ fn generate_c(config: &Config, options: &GenerateOptions) -> Result<()> {
             Generation::write_output(output, &output_directory)
                 .map(drop)
                 .map_err(|error| generation_error(Target::C.name(), error))
+        })
+}
+
+fn generate_ruby(config: &Config, options: &GenerateOptions) -> Result<()> {
+    let target = Target::Ruby;
+    if !config.is_ruby_enabled() {
+        return Err(CliError::CommandFailed {
+            command: "targets.ruby.enabled = false".to_string(),
+            status: None,
+        });
+    }
+
+    if !config.should_process(target, options.experimental) {
+        return Err(CliError::CommandFailed {
+            command: format!(
+                "{} is experimental, use --experimental flag or add \"{}\" to [experimental]",
+                target.name(),
+                target.name()
+            ),
+            status: None,
+        });
+    }
+
+    let expansion = BindingExpansion::resolve(
+        config,
+        &generation_cargo_args(config, Some(TargetSection::Ruby), options),
+    )?;
+    let output_directory = options
+        .output
+        .clone()
+        .unwrap_or_else(|| config.ruby_output());
+    render_ruby(config, &expansion, &output_directory, options.deny_skipped)
+}
+
+/// Writes the Ruby gem sources for one binding expansion.
+///
+/// `pack ruby` passes the expansion that it builds the static library from.
+/// The extension then calls only functions that the library exports: Ruby
+/// resolves a missing function only at its first call, which crashes.
+pub(crate) fn render_ruby(
+    config: &Config,
+    expansion: &BindingExpansion,
+    output_directory: &Path,
+    deny_skipped: bool,
+) -> Result<()> {
+    let target = Target::Ruby;
+    let ruby = &config.targets.ruby;
+    let host = RubyCExtHost::new()
+        .native_library(expansion.artifact_name())
+        .version(ruby.version.clone())
+        .gem_name(config.ruby_gem_name())
+        .and_then(|host| host.module_name(ruby.module_name.as_deref()))
+        .map_err(|error| generation_error(target.name(), GenerationError::Render(error)))?;
+    expansion
+        .generation()
+        .coverage_mode(CoverageMode::Partial)
+        .ruby_host(host)
+        .render(target)
+        .map_err(|error| generation_error(target.name(), error))
+        .and_then(|output| {
+            print_coverage(target.name(), &output, deny_skipped)?;
+            Generation::write_output(output, output_directory)
+                .map(drop)
+                .map_err(|error| generation_error(target.name(), error))
         })
 }
 
@@ -899,6 +964,7 @@ fn target_label(target: &GenerateTarget) -> &'static str {
         GenerateTarget::Python => "python",
         GenerateTarget::CSharp => "csharp",
         GenerateTarget::C => "c",
+        GenerateTarget::Ruby => "ruby",
         GenerateTarget::All => "all",
     }
 }

@@ -6,9 +6,9 @@ use crate::reporter::Reporter;
 
 use super::{
     PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCOptions, PackCSharpOptions,
-    PackDartOptions, PackJavaOptions, PackKmpOptions, PackPythonOptions, PackWasmOptions,
-    pack_android, pack_apple, pack_c, pack_csharp, pack_dart, pack_kmp, pack_prepared_java,
-    pack_python, pack_wasm, prepare_java_pack,
+    PackDartOptions, PackJavaOptions, PackKmpOptions, PackPythonOptions, PackRubyOptions,
+    PackWasmOptions, pack_android, pack_apple, pack_c, pack_csharp, pack_dart, pack_kmp,
+    pack_prepared_java, pack_python, pack_ruby, pack_wasm, prepare_java_pack,
 };
 
 pub(super) fn pack_all(
@@ -125,6 +125,18 @@ pub(super) fn pack_all(
         pack_c(
             config,
             PackCOptions {
+                execution: options.execution.clone(),
+                experimental: options.experimental,
+            },
+            reporter,
+        )?;
+        packed_any = true;
+    }
+
+    if config.should_process(Target::Ruby, options.experimental) {
+        pack_ruby(
+            config,
+            PackRubyOptions {
                 execution: options.execution.clone(),
                 experimental: options.experimental,
             },

@@ -605,6 +605,7 @@ fn csharp_target_compiles_standalone_wire_types() {
 fn csharp_target_compiles_records_containing_class_handles() {
     let bindings = bindings(
         r#"
+        #[export]
         pub struct Token { value: i32 }
 
         #[export]
@@ -636,6 +637,7 @@ fn csharp_record_transfers_nonempty_class_to_rust() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
         static DROPS: AtomicU32 = AtomicU32::new(0);
+        #[export]
         pub struct Token { value: i32 }
         impl Drop for Token {
             fn drop(&mut self) { DROPS.fetch_add(1, Ordering::SeqCst); }
@@ -695,7 +697,7 @@ fn csharp_record_transfers_nonempty_class_to_rust() {
         #[export]
         pub fn failed_collection_decode_releases_handles() -> bool {
             let before = drop_count();
-            let handle = __boltffi_expansion::__BoltffiTokenHandle::new(Token { value: 99 });
+            let handle = <<Token as boltffi::__private::ClassHandle>::Handle>::new(Token { value: 99 });
             let mut bytes = Vec::new();
             bytes.extend_from_slice(&2u32.to_le_bytes());
             bytes.extend_from_slice(&(handle as usize as u64).to_le_bytes());
@@ -897,7 +899,7 @@ fn run_csharp_rust_handoff_when_available(output: &GeneratedOutput, source: &str
     .expect("write fixture build script");
     fs::write(
         crate_dir.join("src/lib.rs"),
-        format!("{source}\npub use __boltffi_expansion::*;\n"),
+        format!("{source}\nboltffi::scaffolding!();\n"),
     )
     .expect("write fixture Rust source");
     let rust = Command::new("cargo")
@@ -1125,7 +1127,7 @@ uint64_t make_token(int value) {
     *token = value;
     return (uint64_t)(uintptr_t)token;
 }
-void boltffi_release_class_demo_token(uint64_t handle) {
+void boltffi_release_class_4demo5Token(uint64_t handle) {
     int *token = (int *)(uintptr_t)handle;
     last_value = *token;
     count++;

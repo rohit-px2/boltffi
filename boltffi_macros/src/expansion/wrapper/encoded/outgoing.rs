@@ -1,4 +1,4 @@
-use boltffi_binding::{CodecNode, Decl, OwnedWireEncoding, RecordDecl};
+use boltffi_binding::{CodecNode, OwnedWireEncoding};
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -19,7 +19,7 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Value<'expansion, '
 
     pub fn buffer(&self, value: TokenStream) -> Result<TokenStream, Error> {
         super::require_runtime_wire(self.codec)?;
-        if self.has_class_handle_record() {
+        if matches!(self.codec, CodecNode::EncodedRecord(_)) {
             return Ok(quote! { #value.__boltffi_wire_encode_owned() });
         }
         let conversion = super::custom::Outgoing::new(self.codec, self.expansion);
@@ -39,11 +39,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Value<'expansion, '
 
     pub fn borrowed_buffer(&self, value: TokenStream) -> Result<TokenStream, Error> {
         super::require_runtime_wire(self.codec)?;
-        if self.has_class_handle_record() {
-            return Err(Error::UnsupportedExpansion(
-                "borrowed record containing class handles",
-            ));
-        }
         let conversion = super::custom::BorrowedOutgoing::new(self.codec, self.expansion);
         if !conversion.has_custom_conversion() {
             return Ok(quote! { ::boltffi::__private::FfiBuf::wire_encode(&#value) });
@@ -54,18 +49,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Value<'expansion, '
                 let __boltffi_wire = #value;
                 ::boltffi::__private::FfiBuf::wire_encode(&__boltffi_wire)
             }
-        })
-    }
-
-    fn has_class_handle_record(&self) -> bool {
-        let CodecNode::EncodedRecord(id) = self.codec else {
-            return false;
-        };
-        self.expansion.bindings().decls().iter().any(|declaration| {
-            matches!(declaration, Decl::Record(record)
-                if matches!(record.as_ref(), RecordDecl::Encoded(record)
-                    if record.id() == *id && record.fields().iter().any(|field|
-                        super::contains_class_handle(field.codec().write().root()))))
         })
     }
 

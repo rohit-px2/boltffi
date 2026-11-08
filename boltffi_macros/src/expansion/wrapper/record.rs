@@ -45,7 +45,6 @@ struct EncodedFieldTokens {
     wire_size: TokenStream,
     encode_to: TokenStream,
     owned_encode_to: TokenStream,
-    class_handle: bool,
     decode_from: TokenStream,
     initializer: Ident,
 }
@@ -283,7 +282,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Encoded<'expansion,
             .iter()
             .map(|field| &field.owned_encode_to)
             .collect::<Vec<_>>();
-        let has_class_handles = fields.iter().any(|field| field.class_handle);
         let decoders = fields
             .iter()
             .map(|field| &field.decode_from)
@@ -292,18 +290,32 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Encoded<'expansion,
             .iter()
             .map(|field| &field.initializer)
             .collect::<Vec<_>>();
-        let owned_encoding = has_class_handles.then(|| quote! {
+        let has_class_handles = self
+            .binding
+            .fields()
+            .iter()
+            .any(|field| encoded::contains_class_handle(field.codec().write().root()));
+        let owned_body = if has_class_handles {
+            quote! {
+                let size = ::boltffi::__private::wire::WireEncode::wire_size(&self);
+                let mut buffer = vec![0u8; size];
+                let Self { #(#initializers),* } = self;
+                let mut __boltffi_offset = 0usize;
+                #(#owned_encoders)*
+                ::boltffi::__private::FfiBuf::from_vec(buffer)
+            }
+        } else {
+            quote! { ::boltffi::__private::FfiBuf::wire_encode(&self) }
+        };
+        // Callers expand without this record's fields, so every encoded record
+        // exposes the same consuming entry point.
+        let owned_encoding = quote! {
             impl #record {
                 pub(crate) fn __boltffi_wire_encode_owned(self) -> ::boltffi::__private::FfiBuf {
-                    let size = ::boltffi::__private::wire::WireEncode::wire_size(&self);
-                    let mut buffer = vec![0u8; size];
-                    let Self { #(#initializers),* } = self;
-                    let mut __boltffi_offset = 0usize;
-                    #(#owned_encoders)*
-                    ::boltffi::__private::FfiBuf::from_vec(buffer)
+                    #owned_body
                 }
             }
-        });
+        };
         Ok(quote! {
             #owned_encoding
             unsafe impl ::boltffi::__private::WirePassable for #record {}
@@ -428,21 +440,20 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> EncodedField<'expan
         let rust_type = rust_api::TypeTokens::new(&self.source.type_expr)?.into_type();
         let codec = self.binding.codec().write().root();
         if matches!(codec, CodecNode::ClassHandle(_)) {
-            let handle = names::Class::from_type_path(&rust_type)?.handle();
+            let handle = names::Class::handle_of(&rust_type);
             return Ok(EncodedFieldTokens {
                 fixed_size_check: quote! { true },
                 fixed_size: quote! { 8usize },
                 wire_size: quote! { 8usize },
                 owned_encode_to: quote! {
                     let __boltffi_raw =
-                        crate::__boltffi_expansion::#handle::new(#field) as usize as u64;
+                        <#handle>::new(#field) as usize as u64;
                     let __boltffi_written =
                         ::boltffi::__private::wire::WireEncode::encode_to(
                             &__boltffi_raw, &mut buffer[__boltffi_offset..]
                         );
                     __boltffi_offset += __boltffi_written;
                 },
-                class_handle: true,
                 // WireEncode only borrows `self`; moving this field out requires
                 // the consuming path generated for owned record returns.
                 encode_to: quote! {
@@ -460,8 +471,8 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> EncodedField<'expan
                         ));
                     }
                     let #field: #rust_type = unsafe {
-                        crate::__boltffi_expansion::#handle::take(
-                            __boltffi_raw as usize as *mut crate::__boltffi_expansion::#handle
+                        <#handle>::take(
+                            __boltffi_raw as usize as *mut #handle
                         )
                     }.ok_or(::boltffi::__private::wire::DecodeError::InvalidValue(
                         ::boltffi::__private::wire::InvalidWireValue::ClassHandle
@@ -486,7 +497,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> EncodedField<'expan
                     ::boltffi::__private::wire::WireEncode::wire_size(&self.#field)
                 },
                 owned_encode_to,
-                class_handle: true,
                 encode_to: quote! {
                     panic!("encoding borrowed class handle collections requires an owned wire value");
                 },
@@ -521,7 +531,6 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> EncodedField<'expan
             decode_from,
             initializer: field,
             owned_encode_to,
-            class_handle: false,
         })
     }
 
@@ -671,10 +680,10 @@ fn owned_class_codec(
     match (codec, ty) {
         (CodecNode::ClassHandle(_), TypeExpr::Class { .. }) => {
             let ty = rust_api::TypeTokens::new(ty)?.into_type();
-            let handle = names::Class::from_type_path(&ty)?.handle();
+            let handle = names::Class::handle_of(&ty);
             Ok(quote! {
                 let __boltffi_raw =
-                    crate::__boltffi_expansion::#handle::new(#value) as usize as u64;
+                    <#handle>::new(#value) as usize as u64;
                 __boltffi_offset += ::boltffi::__private::wire::WireEncode::encode_to(
                     &__boltffi_raw, &mut buffer[__boltffi_offset..]
                 );

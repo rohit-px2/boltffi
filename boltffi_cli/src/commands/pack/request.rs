@@ -11,6 +11,7 @@ pub enum PackCommand {
     Dart(PackDartOptions),
     CSharp(PackCSharpOptions),
     C(PackCOptions),
+    Ruby(PackRubyOptions),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +71,11 @@ pub struct PackCSharpOptions {
 }
 
 pub struct PackCOptions {
+    pub execution: PackExecutionOptions,
+    pub experimental: bool,
+}
+
+pub struct PackRubyOptions {
     pub execution: PackExecutionOptions,
     pub experimental: bool,
 }

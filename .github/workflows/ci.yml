@@ -267,6 +267,10 @@ jobs:
       - uses: dart-lang/setup-dart@v1
         with:
           sdk: 3.10.8
+      - if: runner.os != 'Windows'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
@@ -322,10 +326,12 @@ jobs:
         working-directory: examples/platforms/wasm
       - run: cargo test -p boltffi_cli --test wasm_pack -- --ignored
       - run: cargo test -p boltffi_cli --test wasm_bindgen_cli
-      - run: npx playwright install --with-deps chromium firefox webkit
+      - name: Run browser tests in the Playwright container
         working-directory: examples/platforms/wasm
-      - run: npm run test:browser
-        working-directory: examples/platforms/wasm
+        run: |
+          version="$(node -p 'require("./node_modules/@playwright/test/package.json").version')"
+          docker run --rm --init --ipc=host -v "$GITHUB_WORKSPACE:/w" -w /w/examples/platforms/wasm \
+            "mcr.microsoft.com/playwright:v$version-noble" npm run test:browser
 
   csharp-windows-arm64:
     name: C# Windows x64 + ARM64 package

@@ -182,11 +182,8 @@ fn push_dart_cfg_env(extra_env: &mut Vec<(String, String)>) {
     extra_env.push(("RUSTFLAGS".to_string(), rustflags));
 }
 
-// Cargo only sets CARGO_FEATURE_* for build scripts, so this must build as
-// a binding expansion for the macros to see active features (same fix as
-// the Python target's cdylib build). resolve_preferred (not
-// resolve_for_surface) keeps the configured/default artifact selected
-// even when the package has more than one FFI-capable cargo target.
+// resolve_preferred keeps the configured/default artifact selected even when
+// the package has more than one FFI-capable cargo target.
 fn dart_expansion(config: &Config, build_cargo_args: &[String]) -> Result<BindingExpansion> {
     BindingExpansion::resolve_preferred(config, build_cargo_args, &config.crate_artifact_name())
 }
@@ -421,11 +418,8 @@ mod tests {
         assert_eq!(keys, vec!["unix_ffi".to_owned(), "windows_ffi".to_owned()]);
     }
 
-    /// `pack dart` must build the cdylib as a binding expansion, not a plain
-    /// `cargo build`: the #[data]/#[error] macros read active features from
-    /// BINDING_METADATA_FEATURES_ENV, which only `BuildSelection::Expanded`
-    /// wires up (see `Builder::apply_expansion`). A plain build silently
-    /// drops every #[cfg(feature = ...)]-gated module from the FFI surface.
+    /// `pack dart` builds the cdylib through the selected expansion, so it builds
+    /// the same library target with the same Cargo arguments as every other backend.
     #[test]
     fn dart_cdylib_builds_as_a_binding_expansion() {
         let expansion = BindingExpansion::fixture(

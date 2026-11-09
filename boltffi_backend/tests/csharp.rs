@@ -538,6 +538,46 @@ fn csharp_single_element_tuples_compile_and_use_item_one() {
 }
 
 #[test]
+fn csharp_transparent_tuple_newtype_uses_the_inner_primitive() {
+    let output = target(CSharpHost::new().native_library("demo_native"))
+        .render(&bindings(
+            r#"
+            #[data]
+            pub struct Key(pub u32);
+
+            #[export]
+            pub fn echo_key(key: Key) -> Key { key }
+
+            #[export]
+            pub fn keys(count: u32) -> Vec<Key> { Vec::new() }
+
+            #[export]
+            pub fn sum_keys(keys: Vec<Key>) -> u32 { 0 }
+            "#,
+        ))
+        .expect("a transparent newtype should render");
+    let module = output
+        .files()
+        .iter()
+        .find(|file| file.path().as_path() == Path::new("Demo.cs"))
+        .map(|file| file.contents())
+        .expect("generated Demo.cs");
+    [
+        "public static uint EchoKey(uint key)",
+        "public static uint[] Keys(uint count)",
+        "public static uint SumKeys(uint[] keys)",
+        "return resultReader.ReadU32();",
+    ]
+    .into_iter()
+    .for_each(|signature| assert!(module.contains(signature), "missing {signature}"));
+    assert!(
+        !module.contains("struct Key") && !module.contains("class Key"),
+        "the transparent newtype must not become its own C# type:\n{module}"
+    );
+    compile_csharp_with_dotnet_when_available(&output, "csharp-transparent-newtype");
+}
+
+#[test]
 fn csharp_target_compiles_a_regular_vec_u8_wire_api() {
     let bindings = bindings(
         r#"
@@ -839,6 +879,84 @@ fn csharp_target_qualifies_a_free_function_named_after_its_return_record() {
 }
 
 #[test]
+fn csharp_target_qualifies_fields_named_after_their_types() {
+    const SOURCE: &str = r#"
+        #[data]
+        pub struct Bounds {
+            pub x: f64,
+            pub y: f64,
+        }
+
+        #[data]
+        pub enum Shape {
+            Empty,
+            Circle(f64),
+        }
+
+        #[data]
+        pub enum Mode {
+            Fast,
+            Slow,
+        }
+
+        #[data]
+        pub struct Window {
+            pub id: i32,
+            pub bounds: Option<Bounds>,
+            pub frame: Bounds,
+            pub shape: Option<Shape>,
+            pub mode: Option<Mode>,
+        }
+    "#;
+
+    for (prefix, host, namespace) in [
+        ("csharp-self-named-field", CSharpHost::new(), "global::Demo"),
+        (
+            "csharp-self-named-field-namespaced",
+            CSharpHost::new()
+                .namespace("Demo.Bindings")
+                .expect("valid namespace"),
+            "global::Demo.Bindings",
+        ),
+    ] {
+        let output = target(host.native_library("demo_native"))
+            .render(&bindings(SOURCE))
+            .expect("self-named fields should render");
+        assert!(
+            output.diagnostics().is_empty(),
+            "unexpected diagnostics: {:?}",
+            output.diagnostics()
+        );
+
+        let window = output
+            .files()
+            .iter()
+            .find(|file| file.path().as_path() == Path::new("Window.cs"))
+            .map(|file| file.contents())
+            .expect("generated Window.cs");
+
+        assert!(
+            window.contains(&format!("{namespace}.Bounds.Decode(reader)")),
+            "self-named Bounds field must qualify the record Decode call:\n{window}"
+        );
+        assert!(
+            window.contains(&format!("{namespace}.Shape.Decode(reader)")),
+            "self-named Shape field must qualify the data enum Decode call:\n{window}"
+        );
+        assert!(
+            window.contains(&format!("({namespace}.Mode)")),
+            "self-named Mode field must qualify the C-style enum cast:\n{window}"
+        );
+        assert!(
+            !window.contains("= Bounds.Decode(reader)"),
+            "unqualified record Decode would bind to the Bounds property:\n{window}"
+        );
+
+        compile_csharp_with_dotnet_when_available(&output, prefix);
+    }
+}
+
+#[test]
 fn csharp_target_renders_custom_type_defaults_through_representations() {
     let bindings = bindings(CUSTOM_TYPE_DEFAULT);
     let output = target(
@@ -857,7 +975,9 @@ fn csharp_target_renders_custom_type_defaults_through_representations() {
         .expect("generated DeviationConfig.cs");
 
     assert!(
-        config.contains("public DeviationConfig()\n            : this(new LengthFfi(1500.0))"),
+        config.contains(
+            "public DeviationConfig()\n            : this(new global::Company.Bindings.LengthFfi(1500.0))"
+        ),
         "{config}"
     );
     compile_csharp_with_dotnet_when_available(&output, "csharp-custom-type-default");

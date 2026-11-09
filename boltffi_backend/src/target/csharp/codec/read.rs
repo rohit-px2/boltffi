@@ -57,17 +57,17 @@ impl<'context, 'bindings> Reader<'context, 'bindings> {
     }
 
     fn record_type(&self, id: RecordId) -> Result<TypeFragment> {
-        let ty = type_name::record(id, self.context)?;
-        Ok(self.namespace.as_ref().map_or(ty.clone(), |namespace| {
-            TypeFragment::new(format!("global::{namespace}.{ty}"))
-        }))
+        Ok(type_name::qualify_expression(
+            type_name::record(id, self.context)?,
+            self.namespace.as_ref(),
+        ))
     }
 
     fn enum_type(&self, id: EnumId) -> Result<TypeFragment> {
-        let ty = type_name::enumeration(id, self.context)?;
-        Ok(self.namespace.as_ref().map_or(ty.clone(), |namespace| {
-            TypeFragment::new(format!("global::{namespace}.{ty}"))
-        }))
+        Ok(type_name::qualify_expression(
+            type_name::enumeration(id, self.context)?,
+            self.namespace.as_ref(),
+        ))
     }
 
     fn class_type(&self, id: ClassId) -> Result<TypeFragment> {

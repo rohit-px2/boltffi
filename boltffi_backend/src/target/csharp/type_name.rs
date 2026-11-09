@@ -186,6 +186,16 @@ fn qualify(ty: TypeFragment, namespace: Option<&Namespace>) -> Result<TypeFragme
     }))
 }
 
+// Expression positions (static member access, casts) cannot rely on the
+// enclosing namespace: an in-scope member with the same name as the type
+// shadows the short name. Always anchor the generated type name at `global::`.
+pub(super) fn qualify_expression(ty: TypeFragment, namespace: Option<&Namespace>) -> TypeFragment {
+    TypeFragment::new(match namespace {
+        Some(namespace) => format!("global::{namespace}.{ty}"),
+        None => format!("global::{ty}"),
+    })
+}
+
 // C# tuple syntax requires at least two elements; a single element uses the
 // underlying ValueTuple<T>, whose Item1 field also matches our codec writer.
 pub(super) fn tuple_type(elements: &[String]) -> TypeFragment {

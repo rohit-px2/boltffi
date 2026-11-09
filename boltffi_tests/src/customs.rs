@@ -37,3 +37,28 @@ pub fn instants(count: u32) -> Vec<FixtureInstant> {
         .map(|index| Duration::from_millis(u64::from(index) * 1000))
         .collect()
 }
+
+/// A transparent newtype: every spelling of `FixtureKey` crosses as `u32`.
+#[data]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FixtureKey(pub u32);
+
+#[export]
+pub fn echo_key(key: FixtureKey) -> FixtureKey {
+    key
+}
+
+#[export]
+pub fn shift_key(key: FixtureKey, by: u32) -> FixtureKey {
+    FixtureKey(key.0 + by)
+}
+
+#[export]
+pub fn keys(count: u32) -> Vec<FixtureKey> {
+    (0..count).map(FixtureKey).collect()
+}
+
+#[export]
+pub fn sum_keys(keys: Vec<FixtureKey>) -> u32 {
+    keys.into_iter().map(|key| key.0).sum()
+}

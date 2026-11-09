@@ -114,9 +114,16 @@ impl DeclaredTypes {
             ..Self::default()
         };
         marked.records().iter().try_for_each(|marked| {
-            declared_types.register(DeclaredType::Record(RecordId::new(
-                marked.module().qualified(&marked.item().ident.to_string()),
-            )))
+            let name = marked.item().ident.to_string();
+            let id = marked.module().qualified(&name);
+            // A transparent newtype lowers as its inner type, so it registers as
+            // the custom type the scanner synthesises for it, not as a record. It
+            // stays out of the custom-remote map, so a declared newtype keeps
+            // winning over a `custom_type!` that names the same source path.
+            match items::record::newtype_field(marked.item()) {
+                Some(_) => declared_types.register(DeclaredType::Custom(CustomTypeId::new(id))),
+                None => declared_types.register(DeclaredType::Record(RecordId::new(id))),
+            }
         })?;
         marked.enums().iter().try_for_each(|marked| {
             declared_types.register(DeclaredType::Enum(EnumId::new(

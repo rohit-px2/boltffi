@@ -18,7 +18,8 @@ use super::super::{
 };
 use super::{
     CallbackRuntimeTemplate, CopyBufferTemplate, FreeBufferTemplate, OwnedArgument,
-    OwnedCallTemplate, WireTemplate, direct_type, direct_vector_element_type, primitive_type,
+    OwnedCallTemplate, WireTemplate, direct_type, direct_type_with, direct_vector_element_type,
+    primitive_type,
 };
 
 #[derive(Template)]
@@ -118,7 +119,14 @@ impl Callback {
             .iter()
             .zip(c_callback.methods())
             .map(|(method, slot)| {
-                CallbackMethod::from_declaration(method, slot, &bridge_name, bridge, context)
+                CallbackMethod::from_declaration(
+                    method,
+                    slot,
+                    &bridge_name,
+                    bridge,
+                    &namespace,
+                    context,
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
@@ -186,6 +194,7 @@ impl CallbackMethod {
         slot: &CallbackSlot,
         bridge_name: &Identifier,
         bridge: &CBridgeContract,
+        namespace: &Namespace,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let name = Name::new(declaration.name()).pascal()?;
@@ -193,7 +202,8 @@ impl CallbackMethod {
             declaration.callable().execution(),
             ExecutionDecl::Asynchronous(_)
         );
-        let lowered = LoweredParameters::from_declaration(declaration, slot, bridge, context)?;
+        let lowered =
+            LoweredParameters::from_declaration(declaration, slot, bridge, namespace, context)?;
         let public_return_type =
             public_return_type(declaration.callable().returns().plan(), context)?;
         let native_return_type = c_type(slot.returns(), bridge, context)?;
@@ -238,20 +248,32 @@ impl CallbackMethod {
             )
         };
         let proxy_body = match (asynchronous, &error) {
-            (false, ErrorChannel::None) => {
-                render_proxy_body(declaration, &name, bridge_name, &lowered, context)?
-            }
+            (false, ErrorChannel::None) => render_proxy_body(
+                declaration,
+                &name,
+                bridge_name,
+                &lowered,
+                namespace,
+                context,
+            )?,
             (false, ErrorChannel::Encoded { .. }) => render_fallible_proxy_body(
                 declaration,
                 &name,
                 bridge_name,
                 &lowered,
                 slot,
+                namespace,
                 context,
             )?,
-            (true, _) => {
-                render_async_proxy_body(declaration, &name, bridge_name, &lowered, slot, context)?
-            }
+            (true, _) => render_async_proxy_body(
+                declaration,
+                &name,
+                bridge_name,
+                &lowered,
+                slot,
+                namespace,
+                context,
+            )?,
             _ => Statement::new(
                 "            throw new global::System.NotSupportedException(\"This callback method shape has not migrated\");",
             ),
@@ -289,6 +311,7 @@ impl LoweredParameters {
         declaration: &ImportedMethodDecl<Native, VTableSlot>,
         slot: &CallbackSlot,
         _bridge: &CBridgeContract,
+        namespace: &Namespace,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let mut lowered = Self {
@@ -340,7 +363,7 @@ impl LoweredParameters {
                     let length = Identifier::escape(slot.parameter(slice.length()).name())?;
                     let reader = Identifier::parse(format!("boltffi{name}Reader"))?;
                     let decode = codec
-                        .render_with(&mut Reader::new(reader.clone(), context))
+                        .render_with(&mut Reader::new(reader.clone(), context).qualified(namespace))
                         .map(ReadExpression::into_expression)?;
                     lowered.public.push(CallbackParameter {
                         name: name.clone(),
@@ -741,6 +764,7 @@ fn render_proxy_body(
     method_name: &Identifier,
     bridge_name: &Identifier,
     parameters: &LoweredParameters,
+    namespace: &Namespace,
     context: &RenderContext<Native>,
 ) -> Result<Statement> {
     let slot_name = Name::new(declaration.name()).snake();
@@ -782,7 +806,7 @@ fn render_proxy_body(
             let reader = Identifier::parse("boltffiReturnReader")?;
             let decode = codec
                 .read_plan()
-                .render_with(&mut Reader::new(reader.clone(), context))
+                .render_with(&mut Reader::new(reader.clone(), context).qualified(namespace))
                 .map(ReadExpression::into_expression)?;
             format!(
                 "FfiBuf boltffiBuffer = {call};\ntry\n{{\n    WireReader {reader} = new WireReader(boltffiBuffer);\n    return {decode};\n}}\nfinally\n{{\n    NativeMethods.FreeBuf(boltffiBuffer);\n}}"
@@ -861,6 +885,7 @@ fn render_fallible_proxy_body(
     bridge_name: &Identifier,
     parameters: &LoweredParameters,
     slot: &CallbackSlot,
+    namespace: &Namespace,
     context: &RenderContext<Native>,
 ) -> Result<Statement> {
     let ErrorChannel::Encoded {
@@ -925,7 +950,7 @@ fn render_fallible_proxy_body(
     let error_reader = Identifier::parse("boltffiErrorReader")?;
     let decode_error = error_codec
         .read_plan()
-        .render_with(&mut Reader::new(error_reader.clone(), context))
+        .render_with(&mut Reader::new(error_reader.clone(), context).qualified(namespace))
         .map(ReadExpression::into_expression)?;
     let throw = callback_error_throw(error_type, decode_error, context)?;
     let mut call_body = if parameters.proxy_owned.is_empty() {
@@ -962,7 +987,7 @@ fn render_fallible_proxy_body(
             let reader = Identifier::parse("boltffiSuccessReader")?;
             let decode = codec
                 .read_plan()
-                .render_with(&mut Reader::new(reader.clone(), context))
+                .render_with(&mut Reader::new(reader.clone(), context).qualified(namespace))
                 .map(ReadExpression::into_expression)?;
             call_body.push(format!(
                 "try\n{{\n    WireReader {reader} = new WireReader({out});\n    return {decode};\n}}\nfinally\n{{\n    NativeMethods.FreeBuf({out});\n}}"
@@ -1369,6 +1394,7 @@ fn render_async_proxy_body(
     bridge_name: &Identifier,
     parameters: &LoweredParameters,
     slot: &CallbackSlot,
+    namespace: &Namespace,
     context: &RenderContext<Native>,
 ) -> Result<Statement> {
     let Some(ParameterGroup::CallbackCompletion(completion_group)) = slot.parameter_groups().last()
@@ -1421,7 +1447,7 @@ fn render_async_proxy_body(
             );
             success.push(format!(
                 "boltffiCompletionSource.TrySetResult({});",
-                direct_wire_read(ty, "boltffiSuccessReader", context)?
+                direct_wire_read(ty, "boltffiSuccessReader", namespace, context)?
             ));
         }
         ReturnPlan::DirectViaReturnSlot { .. } | ReturnPlan::DirectViaOutPointer { .. } => {
@@ -1432,7 +1458,7 @@ fn render_async_proxy_body(
             let reader = Identifier::parse("boltffiSuccessReader")?;
             let decode = codec
                 .read_plan()
-                .render_with(&mut Reader::new(reader.clone(), context))
+                .render_with(&mut Reader::new(reader.clone(), context).qualified(namespace))
                 .map(ReadExpression::into_expression)?;
             success.push(format!(
                 "WireReader {reader} = new WireReader(boltffiPayload);"
@@ -1516,7 +1542,7 @@ fn render_async_proxy_body(
         let reader = Identifier::parse("boltffiErrorReader")?;
         let decode = codec
             .read_plan()
-            .render_with(&mut Reader::new(reader.clone(), context))
+            .render_with(&mut Reader::new(reader.clone(), context).qualified(namespace))
             .map(ReadExpression::into_expression)?;
         let exception = callback_error_throw(ty, decode, context)?;
         status.push(format!(
@@ -1618,20 +1644,24 @@ fn direct_wire_write(
 fn direct_wire_read(
     ty: &DirectValueType,
     reader: &str,
+    namespace: &Namespace,
     context: &RenderContext<Native>,
 ) -> Result<String> {
     match ty {
         DirectValueType::Primitive(primitive) => {
             Ok(format!("{reader}.{}()", primitive_read_method(*primitive)))
         }
-        DirectValueType::Record(_) => Ok(format!("{}.Decode({reader})", direct_type(ty, context)?)),
+        DirectValueType::Record(_) => Ok(format!(
+            "{}.Decode({reader})",
+            direct_type_with(ty, Some(namespace), context)?
+        )),
         DirectValueType::Enum(id) => {
             let Some(EnumDecl::CStyle(enumeration)) = context.enumeration(*id) else {
                 return super::unsupported("direct callback enum wire read");
             };
             Ok(format!(
                 "({}){reader}.{}()",
-                direct_type(ty, context)?,
+                direct_type_with(ty, Some(namespace), context)?,
                 primitive_read_method(enumeration.repr().primitive())
             ))
         }

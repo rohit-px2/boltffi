@@ -10,7 +10,7 @@ keywords = ["ffi", "scanner", "syn", "ast"]
 categories = ["development-tools::ffi"]
 
 [dependencies]
-syn.workspace = true
+syn = { workspace = true, features = ["visit-mut"] }
 quote.workspace = true
 proc-macro2.workspace = true
 boltffi_ast.workspace = true

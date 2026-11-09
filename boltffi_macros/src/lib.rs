@@ -90,10 +90,76 @@ pub fn data(attribute: TokenStream, item: TokenStream) -> TokenStream {
     if attribute.to_string().trim() == "impl" {
         return invocation(lane::Kind::DataImpl, attribute, item);
     }
-    syn::parse::<syn::Item>(item.clone())
-        .ok()
-        .and_then(|mut parsed| refuse_second_marker(lane::Kind::Data, &attribute, &mut parsed))
-        .unwrap_or_else(|| invocation(lane::Kind::Data, attribute, item))
+    let mut parsed = syn::parse::<syn::Item>(item.clone()).ok();
+    if let Some(parsed) = parsed.as_mut() {
+        if let Some(refused) = refuse_second_marker(lane::Kind::Data, &attribute, parsed) {
+            return refused;
+        }
+        if !cfg_eval::is_conditional(parsed)
+            && let syn::Item::Struct(item_struct) = &*parsed
+        {
+            match newtype_field(item_struct) {
+                Ok(Some(field)) => {
+                    return transparent_newtype_invocation(item_struct, field);
+                }
+                Ok(None) => {}
+                Err(error) => return error.into(),
+            }
+        }
+    }
+    invocation(lane::Kind::Data, attribute, item)
+}
+
+/// The inner field of a transparent `#[data]` tuple newtype, if the struct is one.
+fn newtype_field(item: &syn::ItemStruct) -> Result<Option<&syn::Field>, proc_macro2::TokenStream> {
+    boltffi_scan::capture_newtype_field(item)
+        .map_err(|error| syn::Error::new_spanned(&item.ident, error.to_string()).to_compile_error())
+}
+
+/// Expands a `#[data]` transparent tuple newtype: the struct as written, the
+/// `CustomFfiConvertible` impl that makes it transparent, and its custom lane.
+fn transparent_newtype_invocation(item: &syn::ItemStruct, field: &syn::Field) -> TokenStream {
+    let emitted: proc_macro2::TokenStream = strip_boltffi_attrs(quote!(#item).into()).into();
+    let described = describe_newtype(item, field);
+    quote!(#emitted #described).into()
+}
+
+fn describe_newtype(item: &syn::ItemStruct, field: &syn::Field) -> proc_macro2::TokenStream {
+    let conversion = transparent_newtype_impl(item, field);
+    let records = capture::custom_ffi_tokens(conversion.clone().into());
+    let lane = lane::start(
+        lane::Kind::CustomFfi,
+        proc_macro2::TokenStream::new(),
+        conversion.clone(),
+    );
+    quote!(#conversion #records #lane)
+}
+
+/// The conversion a hand-written `#[custom_ffi]` impl would carry for a newtype.
+///
+/// The field is cloned because the trait converts from `&self` and the
+/// representation may own its storage, such as a `String`.
+fn transparent_newtype_impl(
+    item: &syn::ItemStruct,
+    field: &syn::Field,
+) -> proc_macro2::TokenStream {
+    let facade = capture::facade();
+    let name = &item.ident;
+    let repr = &field.ty;
+    quote! {
+        impl #facade::CustomFfiConvertible for #name {
+            type FfiRepr = #repr;
+            type Error = ::core::convert::Infallible;
+
+            fn into_ffi(&self) -> Self::FfiRepr {
+                self.0.clone()
+            }
+
+            fn try_from_ffi(repr: Self::FfiRepr) -> Result<Self, Self::Error> {
+                Ok(Self(repr))
+            }
+        }
+    }
 }
 
 /// The BoltFFI markers that each declare what a struct or enum is.
@@ -244,9 +310,7 @@ pub fn cfg_eval(input: TokenStream) -> TokenStream {
         Ok(evaluated) => {
             let item = &evaluated.item;
             let item = quote!(#item);
-            let records = records(evaluated.kind, &evaluated.attribute, item.clone().into());
-            let chain = lane::start(evaluated.kind, evaluated.attribute, item);
-            quote!(#records #chain).into()
+            describe(evaluated.kind, evaluated.attribute, item).into()
         }
         Err(error) => error.to_compile_error().into(),
     }
@@ -273,13 +337,30 @@ fn invocation(kind: lane::Kind, attribute: TokenStream, item: TokenStream) -> To
         Some(parsed) if cfg_eval::is_conditional(parsed) => {
             cfg_eval::defer(kind, attribute, item.into(), parsed)
         }
-        _ => {
-            let records = records(kind, &attribute, item.clone());
-            let chain = lane::start(kind, attribute, item.into());
-            quote!(#records #chain)
-        }
+        _ => describe(kind, attribute, item.into()),
     };
     quote!(#emitted #identity #described).into()
+}
+
+/// The records and lane chain describing one invocation, dispatching a transparent
+/// `#[data]` newtype to the custom-type path.
+fn describe(
+    kind: lane::Kind,
+    attribute: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    if kind == lane::Kind::Data
+        && let Ok(syn::Item::Struct(item_struct)) = syn::parse2::<syn::Item>(item.clone())
+    {
+        match newtype_field(&item_struct) {
+            Ok(Some(field)) => return describe_newtype(&item_struct, field),
+            Ok(None) => {}
+            Err(error) => return error,
+        }
+    }
+    let records = records(kind, &attribute, item.clone().into());
+    let chain = lane::start(kind, attribute, item);
+    quote!(#records #chain)
 }
 
 /// The source records bindgen reads for one invocation.

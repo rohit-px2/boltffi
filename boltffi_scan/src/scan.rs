@@ -197,10 +197,23 @@ fn scan_marked_with_declarations(
         marked.class_declarations(),
         declared_types,
     )?;
-    let mut records = scan_each(marked.records(), declared_types, items::record::scan)?;
+    let (newtypes, record_items): (Vec<_>, Vec<_>) = marked
+        .records()
+        .iter()
+        .partition(|record| items::record::newtype_field(record.item()).is_some());
+    let mut records = scan_each(&record_items, declared_types, |record, declared| {
+        items::record::scan(record, declared)
+    })?;
     let mut enums = scan_each(marked.enums(), declared_types, items::enumeration::scan)?;
     let traits = scan_each(marked.traits(), declared_types, items::callback::scan)?;
-    let customs = scan_each(marked.customs(), declared_types, items::custom_type::scan)?;
+    let newtype_customs = newtypes
+        .iter()
+        .map(|record| items::record::scan_newtype(record, declared_types))
+        .collect::<Result<Vec<_>, _>>()?;
+    let customs = scan_each(marked.customs(), declared_types, items::custom_type::scan)?
+        .into_iter()
+        .chain(newtype_customs)
+        .collect();
     let streams = items::stream::scan(marked.classes(), declared_types)?;
     items::impl_block::attach_methods(marked.impls(), declared_types, &mut records, &mut enums)?;
     let functions = scan_each(marked.functions(), declared_types, items::function::scan)?;
@@ -1078,6 +1091,96 @@ mod tests {
             value_return(&contract.functions[0].returns),
             &custom("demo::Email", "Email")
         );
+    }
+
+    #[test]
+    fn scans_transparent_tuple_newtype_as_a_custom_type() {
+        let contract = scan(
+            "#[data] pub struct Key(pub u32); \
+             #[export] pub fn echo(key: Key) -> Key { key } \
+             #[export] pub fn keys(count: u32) -> Vec<Key> { todo!() }",
+        );
+
+        assert!(contract.records.is_empty(), "a newtype is not a record");
+        assert_eq!(contract.customs.len(), 1);
+        let declaration = &contract.customs[0];
+        assert_eq!(declaration.id, CustomTypeId::new("demo::Key"));
+        assert_eq!(declaration.name.spelling(), "Key");
+        assert_eq!(declaration.remote, CustomRemoteType::single_path("Key"));
+        assert_eq!(declaration.repr, TypeExpr::Primitive(Primitive::U32));
+        assert_eq!(declaration.error, None);
+        assert_eq!(
+            declaration.converters.into_ffi,
+            CustomTypeConverter::trait_method(Path::single("Key"), "into_ffi")
+        );
+        assert_eq!(
+            declaration.converters.try_from_ffi,
+            CustomTypeConverter::trait_method(Path::single("Key"), "try_from_ffi")
+        );
+        assert_eq!(
+            contract.functions[0].parameters[0].type_expr,
+            custom("demo::Key", "Key")
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns),
+            &custom("demo::Key", "Key")
+        );
+        assert_eq!(
+            value_return(&contract.functions[1].returns),
+            &TypeExpr::vec(custom("demo::Key", "Key"))
+        );
+    }
+
+    #[test]
+    fn declared_newtype_wins_over_a_custom_remote_with_same_source_path() {
+        let contract = scan(
+            "custom_type!(pub KeyWire, remote = Key, repr = i64, into_ffi = to_millis, try_from_ffi = from_millis); \
+             #[data] pub struct Key(pub u32); \
+             #[export] pub fn keep(value: Key) -> Key { value }",
+        );
+
+        assert_eq!(
+            contract.functions[0].parameters[0].type_expr,
+            custom("demo::Key", "Key")
+        );
+        assert_eq!(
+            value_return(&contract.functions[0].returns),
+            &custom("demo::Key", "Key")
+        );
+    }
+
+    #[test]
+    fn rejects_multi_field_and_zero_field_tuple_structs() {
+        [
+            "#[data] pub struct Pair(i32, i32);",
+            "#[data] pub struct Empty();",
+        ]
+        .into_iter()
+        .for_each(|source| {
+            let error = try_scan(source).expect_err("tuple struct must reject");
+
+            assert_eq!(
+                error,
+                crate::unsupported::feature(crate::UnsupportedFeature::TupleStruct)
+            );
+        });
+    }
+
+    #[test]
+    fn rejects_record_field_helpers_on_a_transparent_newtype_field() {
+        [
+            "#[data] pub struct Key(#[default(1)] pub u32);",
+            "#[data] pub struct Key(#[skip] pub u32);",
+        ]
+        .into_iter()
+        .for_each(|source| {
+            let error = try_scan(source).expect_err("record field helper must reject");
+
+            assert!(
+                matches!(error, ScanError::InvalidAttribute { .. }),
+                "{error:?}"
+            );
+        });
     }
 
     #[test]

@@ -45,6 +45,18 @@ pub fn capture_struct(item: &syn::ItemStruct) -> Result<CapturedItem<RecordDef>,
     captured(|scope, declared_types| items::record::scan_item(item, scope, declared_types))
 }
 
+/// The inner field of a `#[data]` transparent tuple newtype, if `item` is one.
+///
+/// The proc macro emits the conversion impl itself; this only tells it whether the
+/// item takes that path and refuses record-field helpers that cannot apply.
+pub fn capture_newtype_field(item: &syn::ItemStruct) -> Result<Option<&syn::Field>, ScanError> {
+    let Some(field) = items::record::newtype_field(item) else {
+        return Ok(None);
+    };
+    items::record::reject_newtype_field_helpers(field)?;
+    Ok(Some(field))
+}
+
 /// Captures a `#[data]` enum as an enum definition.
 pub fn capture_enum(item: &syn::ItemEnum) -> Result<CapturedItem<EnumDef>, ScanError> {
     captured(|scope, declared_types| items::enumeration::scan_item(item, scope, declared_types))

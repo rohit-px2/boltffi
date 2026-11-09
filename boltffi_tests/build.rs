@@ -1035,12 +1035,61 @@ static int boltffi_tests_check_direct_records(void) {
         232, 3, 0, 0, 0, 0, 0, 0,
         208, 7, 0, 0, 0, 0, 0, 0
     };
-    return boltffi_tests_check_buf(
+    int instants = boltffi_tests_check_buf(
         boltffi_function_13boltffi_tests8instants(3),
         instants_expected,
         28,
         656
     );
+    if (instants != 0) {
+        return instants;
+    }
+    const uint8_t key[4] = {7, 0, 0, 0};
+    const uint8_t echoed_key_expected[4] = {7, 0, 0, 0};
+    int echoed_key = boltffi_tests_check_buf(
+        boltffi_function_13boltffi_tests8echo_key(key, 4),
+        echoed_key_expected,
+        4,
+        658
+    );
+    if (echoed_key != 0) {
+        return echoed_key;
+    }
+    const uint8_t shifted_key_expected[4] = {12, 0, 0, 0};
+    int shifted_key = boltffi_tests_check_buf(
+        boltffi_function_13boltffi_tests9shift_key(key, 4, 5),
+        shifted_key_expected,
+        4,
+        661
+    );
+    if (shifted_key != 0) {
+        return shifted_key;
+    }
+    const uint8_t keys_expected[16] = {
+        3, 0, 0, 0,
+        0, 0, 0, 0,
+        1, 0, 0, 0,
+        2, 0, 0, 0
+    };
+    int keys = boltffi_tests_check_buf(
+        boltffi_function_13boltffi_tests4keys(3),
+        keys_expected,
+        16,
+        664
+    );
+    if (keys != 0) {
+        return keys;
+    }
+    const uint8_t sum_keys_input[16] = {
+        3, 0, 0, 0,
+        1, 0, 0, 0,
+        2, 0, 0, 0,
+        3, 0, 0, 0
+    };
+    if (boltffi_function_13boltffi_tests8sum_keys(sum_keys_input, 16) != 6) {
+        return 667;
+    }
+    return 0;
 }
 "#
     }

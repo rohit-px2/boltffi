@@ -105,6 +105,7 @@ fn walk(
     let (own_items, mut child_modules) = file.items.into_iter().try_fold(
         (Vec::new(), Vec::new()),
         |(mut own_items, mut child_modules), mut item| {
+            cfg.normalise_item(&mut item)?;
             if !cfg.matches_item(&item)? {
                 return Ok((own_items, child_modules));
             }

@@ -4,6 +4,7 @@ use proc_macro2::TokenStream;
 use quote::ToTokens;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
+use syn::visit_mut::{self, VisitMut};
 use syn::{Attribute, Expr, Lit, Meta, MetaList, MetaNameValue, Path, Token};
 
 use crate::ScanError;
@@ -195,20 +196,55 @@ impl ActiveCfg {
     }
 
     fn matches_cfg_attr(&self, list: &MetaList) -> Result<bool, ScanError> {
-        let attributes = self.predicates(list)?;
-        let mut attributes = attributes.iter();
-        let predicate = attributes
-            .next()
-            .ok_or_else(|| Self::invalid_attribute(list.to_token_stream()))?;
-        if !self.matches_meta(predicate)? {
+        let Some(attributes) = self.cfg_attr_contents(list)? else {
             return Ok(true);
-        }
+        };
 
         attributes
+            .iter()
             .map(|attribute| self.matches_nested_attr(attribute))
             .try_fold(true, |active, matches| {
                 matches.map(|matches| active && matches)
             })
+    }
+
+    fn cfg_attr_contents(&self, list: &MetaList) -> Result<Option<Vec<Meta>>, ScanError> {
+        let mut attributes = self.predicates(list)?.into_iter();
+        let predicate = attributes
+            .next()
+            .ok_or_else(|| Self::invalid_attribute(list.to_token_stream()))?;
+        Ok(self.matches_meta(&predicate)?.then(|| attributes.collect()))
+    }
+
+    pub(crate) fn normalise_item(&self, item: &mut syn::Item) -> Result<(), ScanError> {
+        let mut expander = CfgAttrExpander {
+            cfg: self,
+            error: None,
+        };
+        expander.visit_item_mut(item);
+        expander.error.map_or(Ok(()), Err)
+    }
+
+    fn expand_cfg_attrs(&self, attrs: &[Attribute]) -> Result<Vec<Attribute>, ScanError> {
+        let mut expanded = Vec::with_capacity(attrs.len());
+        for attr in attrs {
+            if !attr.path().is_ident("cfg_attr") {
+                expanded.push(attr.clone());
+                continue;
+            }
+            let Meta::List(list) = &attr.meta else {
+                return Err(Self::invalid_attribute(attr.meta.to_token_stream()));
+            };
+            let Some(nested) = self.cfg_attr_contents(list)? else {
+                continue;
+            };
+            let nested = nested
+                .iter()
+                .map(|meta| syn::parse_quote!(#[#meta]))
+                .collect::<Vec<Attribute>>();
+            expanded.extend(self.expand_cfg_attrs(&nested)?);
+        }
+        Ok(expanded)
     }
 
     fn matches_nested_attr(&self, attribute: &Meta) -> Result<bool, ScanError> {
@@ -285,6 +321,105 @@ impl ActiveCfg {
             syn::ImplItem::Type(item) => &item.attrs,
             _ => &[],
         }
+    }
+}
+
+struct CfgAttrExpander<'cfg> {
+    cfg: &'cfg ActiveCfg,
+    error: Option<ScanError>,
+}
+
+impl CfgAttrExpander<'_> {
+    fn expand(&mut self, attrs: &mut Vec<Attribute>) {
+        if self.error.is_some() {
+            return;
+        }
+        match self.cfg.expand_cfg_attrs(attrs) {
+            Ok(expanded) => *attrs = expanded,
+            Err(error) => self.error = Some(error),
+        }
+    }
+}
+
+impl VisitMut for CfgAttrExpander<'_> {
+    fn visit_item_mut(&mut self, item: &mut syn::Item) {
+        if let Some(attrs) = item_attrs_mut(item) {
+            self.expand(attrs);
+        }
+        visit_mut::visit_item_mut(self, item);
+    }
+
+    fn visit_impl_item_mut(&mut self, item: &mut syn::ImplItem) {
+        if let Some(attrs) = impl_item_attrs_mut(item) {
+            self.expand(attrs);
+        }
+        visit_mut::visit_impl_item_mut(self, item);
+    }
+
+    fn visit_trait_item_mut(&mut self, item: &mut syn::TraitItem) {
+        if let Some(attrs) = trait_item_attrs_mut(item) {
+            self.expand(attrs);
+        }
+        visit_mut::visit_trait_item_mut(self, item);
+    }
+
+    fn visit_field_mut(&mut self, field: &mut syn::Field) {
+        self.expand(&mut field.attrs);
+        visit_mut::visit_field_mut(self, field);
+    }
+
+    fn visit_variant_mut(&mut self, variant: &mut syn::Variant) {
+        self.expand(&mut variant.attrs);
+        visit_mut::visit_variant_mut(self, variant);
+    }
+
+    fn visit_fn_arg_mut(&mut self, arg: &mut syn::FnArg) {
+        match arg {
+            syn::FnArg::Receiver(receiver) => self.expand(&mut receiver.attrs),
+            syn::FnArg::Typed(argument) => self.expand(&mut argument.attrs),
+        }
+        visit_mut::visit_fn_arg_mut(self, arg);
+    }
+}
+
+fn item_attrs_mut(item: &mut syn::Item) -> Option<&mut Vec<Attribute>> {
+    match item {
+        syn::Item::Const(item) => Some(&mut item.attrs),
+        syn::Item::Enum(item) => Some(&mut item.attrs),
+        syn::Item::ExternCrate(item) => Some(&mut item.attrs),
+        syn::Item::Fn(item) => Some(&mut item.attrs),
+        syn::Item::ForeignMod(item) => Some(&mut item.attrs),
+        syn::Item::Impl(item) => Some(&mut item.attrs),
+        syn::Item::Macro(item) => Some(&mut item.attrs),
+        syn::Item::Mod(item) => Some(&mut item.attrs),
+        syn::Item::Static(item) => Some(&mut item.attrs),
+        syn::Item::Struct(item) => Some(&mut item.attrs),
+        syn::Item::Trait(item) => Some(&mut item.attrs),
+        syn::Item::TraitAlias(item) => Some(&mut item.attrs),
+        syn::Item::Type(item) => Some(&mut item.attrs),
+        syn::Item::Union(item) => Some(&mut item.attrs),
+        syn::Item::Use(item) => Some(&mut item.attrs),
+        _ => None,
+    }
+}
+
+fn impl_item_attrs_mut(item: &mut syn::ImplItem) -> Option<&mut Vec<Attribute>> {
+    match item {
+        syn::ImplItem::Const(item) => Some(&mut item.attrs),
+        syn::ImplItem::Fn(item) => Some(&mut item.attrs),
+        syn::ImplItem::Macro(item) => Some(&mut item.attrs),
+        syn::ImplItem::Type(item) => Some(&mut item.attrs),
+        _ => None,
+    }
+}
+
+fn trait_item_attrs_mut(item: &mut syn::TraitItem) -> Option<&mut Vec<Attribute>> {
+    match item {
+        syn::TraitItem::Const(item) => Some(&mut item.attrs),
+        syn::TraitItem::Fn(item) => Some(&mut item.attrs),
+        syn::TraitItem::Macro(item) => Some(&mut item.attrs),
+        syn::TraitItem::Type(item) => Some(&mut item.attrs),
+        _ => None,
     }
 }
 

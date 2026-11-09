@@ -9,7 +9,7 @@ use crate::core::{
 
 use super::super::{
     name_style::{Name, Namespace},
-    syntax::{Expression, Literal},
+    syntax::{Expression, Literal, TypeFragment},
     type_name,
 };
 
@@ -98,10 +98,8 @@ impl DefaultExpression {
                     }
                 };
                 let name = Name::new(record.name()).pascal()?;
-                let name = namespace.map_or_else(
-                    || name.to_string(),
-                    |namespace| format!("global::{namespace}.{name}"),
-                );
+                let name =
+                    type_name::qualify_expression(TypeFragment::new(name.to_string()), namespace);
                 Ok(Self::Runtime(Expression::new(format!(
                     "new {name}({})",
                     value.into_expression()
@@ -122,10 +120,7 @@ impl DefaultExpression {
         let Some(enumeration) = context.enumeration(*id) else {
             return super::super::unsupported("missing enum default declaration");
         };
-        let ty = match namespace {
-            Some(namespace) => type_name::type_ref_qualified(ty, namespace, context)?,
-            None => type_name::type_ref(ty, context)?,
-        };
+        let ty = type_name::qualify_expression(type_name::enumeration(*id, context)?, namespace);
         let variant = Name::new(variant_name).pascal()?;
         match enumeration {
             EnumDecl::CStyle(_) => Ok(Self::Constant(Expression::new(format!("{ty}.{variant}")))),

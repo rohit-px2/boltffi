@@ -465,6 +465,29 @@ mod custom_types {
             vec![0, 1000, 2000]
         );
     }
+
+    #[test]
+    fn transparent_newtype_crosses_as_its_inner_primitive() {
+        let echoed = with_encoded(&7_u32, |ptr, len| unsafe {
+            boltffi_function_13boltffi_tests8echo_key(ptr, len)
+        });
+        assert_eq!(decode_buf::<u32>(echoed), 7);
+
+        let shifted = with_encoded(&7_u32, |ptr, len| unsafe {
+            boltffi_function_13boltffi_tests9shift_key(ptr, len, 5)
+        });
+        assert_eq!(decode_buf::<u32>(shifted), 12);
+
+        assert_eq!(
+            decode_buf::<Vec<u32>>(unsafe { boltffi_function_13boltffi_tests4keys(3) }),
+            vec![0, 1, 2]
+        );
+
+        let sum = with_encoded(&vec![1_u32, 2, 3], |ptr, len| unsafe {
+            boltffi_function_13boltffi_tests8sum_keys(ptr, len)
+        });
+        assert_eq!(sum, 6);
+    }
 }
 
 mod asynchronous {

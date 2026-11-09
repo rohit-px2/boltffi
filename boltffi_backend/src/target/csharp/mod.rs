@@ -235,7 +235,12 @@ impl host::HostBackend for CSharpHost {
         bridge: &Self::Bridge,
         context: &RenderContext<Self::Surface>,
     ) -> Result<Emitted> {
-        let stream = render::Stream::from_declaration(decl, bridge, context)?;
+        let stream = render::Stream::from_declaration(
+            decl,
+            &self.namespace_for(context.bindings())?,
+            bridge,
+            context,
+        )?;
         self.validate_module_class(context.bindings(), stream.namespace_type_names()?)?;
         stream.render()
     }
@@ -619,11 +624,9 @@ mod tests {
         assert!(callback.contains("boltffiStatus.code == 1"));
         assert!(callback.contains("catch (global::System.Exception boltffiError)"));
         assert!(callback.contains("boltffiValue.Encode(boltffiSuccessWriter);"));
-        assert!(
-            callback.contains(
-                "boltffiCompletionSource.TrySetResult(Point.Decode(boltffiSuccessReader));"
-            )
-        );
+        assert!(callback.contains(
+            "boltffiCompletionSource.TrySetResult(global::Demo.Point.Decode(boltffiSuccessReader));"
+        ));
         assert!(!callback.contains("This callback method shape has not migrated"));
 
         let module = file(&output, "Demo.cs");
@@ -1285,7 +1288,7 @@ mod tests {
             .render(&bindings)
             .expect("record with class handle should render");
         let record = file(&output, "Response.cs");
-        assert!(record.contains("new Token(reader.ReadU64())"));
+        assert!(record.contains("new global::Demo.Token(reader.ReadU64())"));
         assert!(record.contains("writer.WriteU64(this.Token.TakeHandle());"));
         assert!(output.diagnostics().is_empty());
     }
@@ -1361,7 +1364,7 @@ mod tests {
         assert!(profile.contains("internal static Profile Decode(WireReader reader)"));
         assert!(profile.contains("reader.ReadString()"));
         assert!(profile.contains("reader.ReadArray(reader => reader.ReadString())"));
-        assert!(profile.contains("Point.Decode(reader)"));
+        assert!(profile.contains("global::Demo.Point.Decode(reader)"));
         assert!(profile.contains(
             "reader.ReadResult(reader => reader.ReadI32(), reader => reader.ReadString())"
         ));

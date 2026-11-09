@@ -238,13 +238,15 @@ impl Record {
                         .meta()
                         .default()
                         .map(|value| {
-                            DefaultExpression::render(field.ty(), value, None, context)
+                            DefaultExpression::render(field.ty(), value, Some(&namespace), context)
                                 .map(DefaultExpression::into_expression)
                         })
                         .transpose()?,
                     read: field
                         .read()
-                        .render_with(&mut Reader::new(reader.clone(), context))
+                        .render_with(
+                            &mut Reader::new(reader.clone(), context).qualified(&namespace),
+                        )
                         .map(ReadExpression::into_expression)?,
                     write: field
                         .write()

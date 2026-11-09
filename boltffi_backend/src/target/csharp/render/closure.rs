@@ -11,6 +11,7 @@ use crate::{
 
 use super::super::{
     codec::{ReadExpression, Reader, Writer},
+    name_style::Namespace,
     syntax::{Expression, Identifier, Statement, TypeFragment},
     type_name,
 };
@@ -38,6 +39,7 @@ impl ClosureArgument {
         helper_name: Identifier,
         declaration: &ClosureParameter<Native, boltffi_binding::IntoRust>,
         c_closure: &CClosureParameter,
+        namespace: Option<&Namespace>,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
         let all_groups = c_closure.parameter_groups();
@@ -82,8 +84,12 @@ impl ClosureArgument {
                     let pointer = Identifier::escape(c_closure.parameter(slice.pointer()).name())?;
                     let length = Identifier::escape(c_closure.parameter(slice.length()).name())?;
                     let reader = Identifier::parse(format!("boltffi{pointer}Reader"))?;
+                    let mut codec_reader = Reader::new(reader.clone(), context);
+                    if let Some(namespace) = namespace {
+                        codec_reader = codec_reader.qualified(namespace);
+                    }
                     let decode = codec
-                        .render_with(&mut Reader::new(reader.clone(), context))
+                        .render_with(&mut codec_reader)
                         .map(ReadExpression::into_expression)?;
                     public_parameters.push(type_name::type_ref(ty, context)?);
                     native_parameters

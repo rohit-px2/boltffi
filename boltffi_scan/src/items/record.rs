@@ -1,4 +1,7 @@
-use boltffi_ast::{FieldDef, RecordDef, RecordId};
+use boltffi_ast::{
+    CustomRemoteType, CustomTypeConverter, CustomTypeConverters, CustomTypeDef, CustomTypeId,
+    FieldDef, Path, RecordDef, RecordId,
+};
 use syn::spanned::Spanned;
 
 use crate::attributes::Attributes;
@@ -43,6 +46,66 @@ fn build(
     record.user_attrs = attrs.user_attrs();
     record.fields = record_fields(&item.fields, &scanner)?;
     Ok(record)
+}
+
+/// The single field of a transparent tuple newtype, if `item` is one.
+///
+/// `#[data]` on a struct with exactly one unnamed field lowers the type as that
+/// field's type, through the custom-type path, so it produces no record fields.
+pub(crate) fn newtype_field(item: &syn::ItemStruct) -> Option<&syn::Field> {
+    match &item.fields {
+        syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => fields.unnamed.first(),
+        _ => None,
+    }
+}
+
+/// Refuses field helpers that only describe a record field on a transparent newtype.
+pub(crate) fn reject_newtype_field_helpers(field: &syn::Field) -> Result<(), ScanError> {
+    field
+        .attrs
+        .iter()
+        .find_map(|attr| {
+            matches!(attributes::owned_name(attr), Some("default" | "skip")).then(|| {
+                ScanError::InvalidAttribute {
+                    attribute: crate::spelling::attr(attr),
+                }
+            })
+        })
+        .map_or(Ok(()), Err)
+}
+
+/// The custom type declaration a transparent newtype lowers through.
+pub(crate) fn scan_newtype(
+    marked: &Marked<'_, syn::ItemStruct>,
+    declared_types: &DeclaredTypes,
+) -> Result<CustomTypeDef, ScanError> {
+    let item = marked.item();
+    let field =
+        newtype_field(item).ok_or_else(|| unsupported::feature(UnsupportedFeature::TupleStruct))?;
+    reject_newtype_field_helpers(field)?;
+    unsupported::generics(&item.generics, &format!("record {}", item.ident))?;
+    let scope = marked.scope();
+    let name = item.ident.to_string();
+    let scanner = Scanner::new(declared_types, scope);
+    let attrs = Attributes::new(&item.attrs, &scanner);
+    let receiver = Path::single(name.as_str());
+    let mut custom = CustomTypeDef::new(
+        CustomTypeId::new(scope.path().qualified(&name)),
+        name::source(&item.ident),
+        CustomRemoteType::single_path(name),
+        scanner.scan(&field.ty)?,
+        None,
+        CustomTypeConverters::new(
+            CustomTypeConverter::trait_method(receiver.clone(), "into_ffi"),
+            CustomTypeConverter::trait_method(receiver, "try_from_ffi"),
+        ),
+    );
+    custom.source = attributes::source(&item.vis, scope, item.span());
+    custom.source_span = custom.source.span.clone();
+    custom.doc = attrs.doc();
+    custom.deprecated = attrs.deprecated()?;
+    custom.user_attrs = attrs.user_attrs();
+    Ok(custom)
 }
 
 fn record_fields(fields: &syn::Fields, scanner: &Scanner<'_>) -> Result<Vec<FieldDef>, ScanError> {

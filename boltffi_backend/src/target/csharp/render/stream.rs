@@ -10,7 +10,7 @@ use crate::{
 
 use super::super::{
     codec::{ReadExpression, Reader},
-    name_style::Name,
+    name_style::{Name, Namespace},
     syntax::{Identifier, Literal, TypeFragment},
     type_name,
 };
@@ -43,12 +43,14 @@ struct StreamItem {
 }
 
 struct StreamItemRenderer<'a> {
+    namespace: &'a Namespace,
     context: &'a RenderContext<'a, Native>,
 }
 
 impl Stream {
     pub(in crate::target::csharp) fn from_declaration(
         declaration: &StreamDecl<Native>,
+        namespace: &Namespace,
         bridge: &CBridgeContract,
         context: &RenderContext<Native>,
     ) -> Result<Self> {
@@ -70,7 +72,7 @@ impl Stream {
         };
         let mut item = declaration
             .item()
-            .render_with(&mut StreamItemRenderer { context })?;
+            .render_with(&mut StreamItemRenderer { namespace, context })?;
         item.read_batch = item.read_batch.replace(
             "NativeStreamPopBatch",
             &format!("Native{qualified}PopBatch"),
@@ -338,7 +340,7 @@ impl<'plan> StreamItemPlanRender<'plan, Native> for StreamItemRenderer<'_> {
         let ty = type_name::type_ref(ty, self.context)?;
         let reader = Identifier::parse("boltffiReader")?;
         let decode = read
-            .render_with(&mut Reader::new(reader.clone(), self.context))
+            .render_with(&mut Reader::new(reader.clone(), self.context).qualified(self.namespace))
             .map(ReadExpression::into_expression)?;
         Ok(StreamItem {
             ty: ty.clone(),

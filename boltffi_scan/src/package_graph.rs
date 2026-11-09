@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Deserialize;
-use syn::{Attribute, Item};
+use syn::{Attribute, Item, Meta, Token};
 use walkdir::WalkDir;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -423,12 +423,7 @@ impl ExportDetector {
     }
 
     fn has_any_attribute(attrs: &[Attribute], names: &[&str]) -> bool {
-        attrs.iter().any(|attr| {
-            attr.path()
-                .segments
-                .last()
-                .is_some_and(|segment| names.iter().any(|name| segment.ident == *name))
-        })
+        attrs.iter().any(|attr| meta_has_name(&attr.meta, names))
     }
 
     fn has_ffi_type_derive(attrs: &[Attribute]) -> bool {
@@ -449,6 +444,24 @@ impl ExportDetector {
             })
         })
     }
+}
+
+fn meta_has_name(meta: &Meta, names: &[&str]) -> bool {
+    if meta
+        .path()
+        .segments
+        .last()
+        .is_some_and(|segment| names.iter().any(|name| segment.ident == *name))
+    {
+        return true;
+    }
+    let Meta::List(list) = meta else {
+        return false;
+    };
+    list.path.is_ident("cfg_attr")
+        && list
+            .parse_args_with(syn::punctuated::Punctuated::<Meta, Token![,]>::parse_terminated)
+            .is_ok_and(|metas| metas.iter().any(|meta| meta_has_name(meta, names)))
 }
 
 fn cargo_crate_name(package_or_target_name: &str) -> String {

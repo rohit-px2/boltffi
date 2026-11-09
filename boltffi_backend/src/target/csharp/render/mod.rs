@@ -1019,6 +1019,7 @@ impl Function {
                         helper_name,
                         declaration,
                         closure_group,
+                        type_namespace,
                         context,
                     )?;
                     closure.parameter.default = default;

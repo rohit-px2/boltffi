@@ -311,7 +311,8 @@ impl<'expansion, 'lowered, S: boltffi_binding::SurfaceLower> Encoded<'expansion,
         // exposes the same consuming entry point.
         let owned_encoding = quote! {
             impl #record {
-                pub(crate) fn __boltffi_wire_encode_owned(self) -> ::boltffi::__private::FfiBuf {
+                #[doc(hidden)]
+                pub fn __boltffi_wire_encode_owned(self) -> ::boltffi::__private::FfiBuf {
                     #owned_body
                 }
             }

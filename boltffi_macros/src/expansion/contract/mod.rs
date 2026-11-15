@@ -3470,6 +3470,7 @@ mod tests {
         assert!(rendered.contains("Profile :: try_from_name (name)"));
         assert!(rendered.contains(":: core :: ptr :: write (__boltffi_return_out ,"));
         assert!(rendered.contains(". __boltffi_wire_encode_owned ()"));
+        assert!(rendered.contains("pub fn __boltffi_wire_encode_owned"));
     }
 
     #[test]

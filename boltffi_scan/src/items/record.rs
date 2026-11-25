@@ -44,7 +44,7 @@ fn build(
     record.doc = attrs.doc();
     record.deprecated = attrs.deprecated()?;
     record.user_attrs = attrs.user_attrs();
-    record.fields = record_fields(&item.fields, &scanner)?;
+    record.fields = record_fields(&item.fields, &scanner).map_err(|error| error.at(&item.ident))?;
     Ok(record)
 }
 
@@ -115,7 +115,9 @@ fn record_fields(fields: &syn::Fields, scanner: &Scanner<'_>) -> Result<Vec<Fiel
             .iter()
             .map(|field| record_field(field, scanner))
             .collect(),
-        syn::Fields::Unnamed(_) => Err(unsupported::feature(UnsupportedFeature::TupleStruct)),
+        syn::Fields::Unnamed(unnamed) => {
+            Err(unsupported::feature(UnsupportedFeature::TupleStruct).at(unnamed))
+        }
         syn::Fields::Unit => Err(unsupported::feature(UnsupportedFeature::UnitStruct)),
     }
 }
@@ -180,8 +182,14 @@ mod tests {
         let tuple = scan("pub struct Pair(i32, i32);").expect_err("tuple struct must reject");
         let unit = scan("pub struct Marker;").expect_err("unit struct must reject");
 
-        assert_eq!(tuple, unsupported::feature(UnsupportedFeature::TupleStruct));
-        assert_eq!(unit, unsupported::feature(UnsupportedFeature::UnitStruct));
+        assert_eq!(
+            tuple.unlocated().clone(),
+            unsupported::feature(UnsupportedFeature::TupleStruct)
+        );
+        assert_eq!(
+            unit.unlocated().clone(),
+            unsupported::feature(UnsupportedFeature::UnitStruct)
+        );
     }
 
     #[test]
@@ -219,7 +227,7 @@ mod tests {
         let error = scan("pub struct Shape { pub point: Point }").expect_err("field type rejected");
 
         assert!(matches!(
-            error,
+            error.unlocated(),
             ScanError::UnsupportedType { spelling } if spelling == "Point"
         ));
     }
@@ -259,7 +267,7 @@ mod tests {
             .expect_err("generic rejected");
 
         assert_eq!(
-            error,
+            error.unlocated().clone(),
             ScanError::UnsupportedGenerics {
                 item: "record Array".to_owned()
             }

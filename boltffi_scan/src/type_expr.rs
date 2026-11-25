@@ -41,12 +41,28 @@ impl<'a> Scanner<'a> {
             ));
         }
         match unwrapped {
-            syn::Type::BareFn(bare_fn) => self.bare_fn(bare_fn),
+            syn::Type::FnPtr(fn_ptr) => self.fn_ptr(fn_ptr),
             syn::Type::ImplTrait(impl_trait) => self.impl_trait(impl_trait, ty),
             syn::Type::Slice(slice) => self.slice(slice),
             syn::Type::Path(type_path) => self.path(type_path, ty),
             syn::Type::TraitObject(trait_object) => self.dyn_trait(trait_object, ty),
             syn::Type::Tuple(tuple) => self.tuple(tuple),
+            syn::Type::Array(array) => Err(ScanError::unsupported_rust_type(
+                ty,
+                format!("use `Vec<{}>`", crate::spelling::ty(&array.elem)),
+            )),
+            syn::Type::Never(_) => Err(ScanError::unsupported_rust_type(
+                ty,
+                "an exported function must return a value or `()`",
+            )),
+            syn::Type::Ptr(_) => Err(ScanError::unsupported_rust_type(
+                ty,
+                "pass an owned value, a reference, or `Vec<u8>`",
+            )),
+            syn::Type::Reference(reference) => Err(ScanError::unsupported_rust_type(
+                ty,
+                format!("use the owned type `{}`", owned(reference)),
+            )),
             _ => Err(ScanError::unsupported_type(ty)),
         }
     }
@@ -88,7 +104,13 @@ impl<'a> Scanner<'a> {
             {
                 Ok(TypeExpr::Slice(element))
             }
-            _ => Err(ScanError::unsupported_type(source)),
+            _ => Err(ScanError::unsupported_rust_type(
+                source,
+                format!(
+                    "only `&str` and `&[u8]` can be returned by reference, so return `{}`",
+                    owned(reference)
+                ),
+            )),
         }
     }
 
@@ -196,6 +218,9 @@ impl<'a> Scanner<'a> {
     }
 
     fn named(&self, type_path: &syn::TypePath, source: &syn::Type) -> Result<TypeExpr, ScanError> {
+        if let Some(advice) = unsupported_standard_type(&type_path.path) {
+            return Err(ScanError::unsupported_rust_type(source, advice));
+        }
         if type_path
             .path
             .segments
@@ -313,6 +338,12 @@ impl<'a> Scanner<'a> {
         bound: &syn::TraitBound,
         source: &syn::Type,
     ) -> Result<TraitBoundPart, ScanError> {
+        if is_standard_error_trait(&bound.path) {
+            return Err(ScanError::unsupported_rust_type(
+                source,
+                "return `Result<T, String>` or a `#[error]` type",
+            ));
+        }
         if let Some(base) = self.base_trait(bound)? {
             return Ok(TraitBoundPart::Base(base));
         }
@@ -326,7 +357,7 @@ impl<'a> Scanner<'a> {
         &self,
         bound: &syn::TraitBound,
     ) -> Result<Option<AdditionalBound>, ScanError> {
-        if !matches!(bound.modifier, syn::TraitBoundModifier::None)
+        if crate::unsupported::has_bound_modifier(bound)
             || bound.lifetimes.is_some()
             || closure_bound(bound).is_some()
             || bound
@@ -349,7 +380,7 @@ impl<'a> Scanner<'a> {
     }
 
     fn base_trait(&self, bound: &syn::TraitBound) -> Result<Option<BaseTrait>, ScanError> {
-        if !matches!(bound.modifier, syn::TraitBoundModifier::None) || bound.lifetimes.is_some() {
+        if crate::unsupported::has_bound_modifier(bound) || bound.lifetimes.is_some() {
             return Ok(None);
         }
         if let Some((kind, arguments)) = closure_bound(bound) {
@@ -395,33 +426,34 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn bare_fn(&self, bare_fn: &syn::TypeBareFn) -> Result<TypeExpr, ScanError> {
-        if bare_fn.lifetimes.is_some() {
+    fn fn_ptr(&self, fn_ptr: &syn::TypeFnPtr) -> Result<TypeExpr, ScanError> {
+        if fn_ptr.lifetimes.is_some() {
             return Err(crate::unsupported::feature(
                 UnsupportedFeature::HigherRankedFunctionPointer,
-            ));
+            )
+            .at(fn_ptr));
         }
-        if bare_fn.unsafety.is_some() {
-            return Err(crate::unsupported::feature(
-                UnsupportedFeature::UnsafeFunctionPointer,
-            ));
+        if fn_ptr.unsafety.is_some() {
+            return Err(
+                crate::unsupported::feature(UnsupportedFeature::UnsafeFunctionPointer).at(fn_ptr),
+            );
         }
-        if bare_fn.abi.is_some() {
-            return Err(crate::unsupported::feature(
-                UnsupportedFeature::ExternFunctionPointer,
-            ));
+        if fn_ptr.abi.is_some() {
+            return Err(
+                crate::unsupported::feature(UnsupportedFeature::ExternFunctionPointer).at(fn_ptr),
+            );
         }
-        if bare_fn.variadic.is_some() {
-            return Err(crate::unsupported::feature(
-                UnsupportedFeature::VariadicFunctionPointer,
-            ));
+        if fn_ptr.variadic.is_some() {
+            return Err(
+                crate::unsupported::feature(UnsupportedFeature::VariadicFunctionPointer).at(fn_ptr),
+            );
         }
-        let parameters = bare_fn
+        let parameters = fn_ptr
             .inputs
             .iter()
             .map(|argument| self.scan(&argument.ty))
             .collect::<Result<Vec<_>, _>>()?;
-        let returns = self.scan_return(&bare_fn.output)?;
+        let returns = self.scan_return(&fn_ptr.output)?;
         Ok(TypeExpr::fn_ptr(FnSig::new(parameters, returns)))
     }
 
@@ -433,7 +465,7 @@ impl<'a> Scanner<'a> {
         let parameters = arguments
             .inputs
             .iter()
-            .map(|input| self.scan(input))
+            .map(|input| self.scan(&input.ty))
             .collect::<Result<Vec<_>, _>>()?;
         let returns = self.scan_return(&arguments.output)?;
         Ok(FnTrait::new(kind, FnSig::new(parameters, returns)))
@@ -565,12 +597,67 @@ pub fn primitive_path(path: &syn::Path) -> Option<Primitive> {
         return None;
     }
     let primitive = Primitive::from_rust_name(&path.segments.last()?.ident.to_string())?;
-    match path.segments.len() {
-        1 => Some(primitive),
-        3 => ((path.segments[0].ident == "std" || path.segments[0].ident == "core")
-            && path.segments[1].ident == "primitive")
-            .then_some(primitive),
+    is_primitive_form(&segment_names(path)).then_some(primitive)
+}
+
+fn segment_names(path: &syn::Path) -> Vec<String> {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect()
+}
+
+/// Whether a path spells its leaf bare or as `std::primitive::` / `core::primitive::`.
+fn is_primitive_form(names: &[String]) -> bool {
+    names.len() == 1
+        || (names.len() == 3
+            && matches!(names[0].as_str(), "std" | "core")
+            && names[1] == "primitive")
+}
+
+/// What to use instead of a standard-library type that has no boundary mapping.
+fn unsupported_standard_type(path: &syn::Path) -> Option<&'static str> {
+    let names = segment_names(path);
+    let leaf = names.last()?.as_str();
+    if is_primitive_form(&names) {
+        return match leaf {
+            "char" => Some("use `u32` for a code point or `String` for text"),
+            "i128" | "u128" => Some("use `i64` or `u64`, or `String` for larger values"),
+            _ => None,
+        };
+    }
+    if !matches!(names[0].as_str(), "std" | "core" | "alloc") {
+        return None;
+    }
+    match leaf {
+        "HashSet" | "BTreeSet" | "VecDeque" | "LinkedList" | "BinaryHeap" => Some("use `Vec<T>`"),
+        "PathBuf" | "Path" | "OsString" | "OsStr" | "CString" | "CStr" => Some("use `String`"),
+        "Rc" | "Cell" | "RefCell" | "Mutex" | "RwLock" => {
+            Some("pass the value itself, or keep shared state in an exported class")
+        }
+        "Result" => Some("use `Result<T, E>` with `String` or a `#[error]` type as `E`"),
         _ => None,
+    }
+}
+
+fn is_standard_error_trait(path: &syn::Path) -> bool {
+    let names = segment_names(path);
+    names.len() == 3
+        && matches!(names[0].as_str(), "std" | "core")
+        && names[1..] == ["error", "Error"]
+}
+
+/// The owned type to use instead of a reference.
+fn owned(reference: &syn::TypeReference) -> String {
+    match unwrapped(&reference.elem) {
+        syn::Type::Path(path) if path.path.is_ident("str") => "String".to_owned(),
+        syn::Type::Slice(slice) => format!("Vec<{}>", crate::spelling::ty(&slice.elem)),
+        elem @ syn::Type::TraitObject(_) => format!("Box<{}>", crate::spelling::ty(elem)),
+        elem @ syn::Type::ImplTrait(_) => {
+            let spelled = crate::spelling::ty(elem);
+            format!("Box<dyn {}>", spelled.trim_start_matches("impl "))
+        }
+        elem => crate::spelling::ty(elem),
     }
 }
 
@@ -839,6 +926,35 @@ mod tests {
 
     fn ty(source: &str) -> syn::Type {
         syn::parse_str(source).expect("valid type")
+    }
+
+    #[test]
+    fn references_to_trait_objects_suggest_a_box() {
+        let owned_of = |source: &str| match ty(source) {
+            syn::Type::Reference(reference) => owned(&reference),
+            _ => panic!("reference type"),
+        };
+
+        assert_eq!(owned_of("&dyn Listener"), "Box<dyn Listener>");
+        assert_eq!(owned_of("&impl Fn()"), "Box<dyn Fn()>");
+        assert_eq!(owned_of("&[u8]"), "Vec<u8>");
+        assert_eq!(owned_of("&str"), "String");
+    }
+
+    #[test]
+    fn standard_types_without_a_mapping_get_advice_and_user_paths_do_not() {
+        let advice = |source: &str| match ty(source) {
+            syn::Type::Path(path) => unsupported_standard_type(&path.path),
+            _ => panic!("path type"),
+        };
+
+        assert_eq!(advice("char"), advice("std::primitive::char"));
+        assert!(advice("char").is_some());
+        assert!(advice("std::collections::HashSet<String>").is_some());
+        assert!(advice("std::io::Result<i32>").is_some());
+        assert_eq!(advice("geometry::HashSet"), None);
+        assert_eq!(advice("HashSet<String>"), None);
+        assert_eq!(advice("std::string::String"), None);
     }
 
     fn item(source: &str) -> syn::Item {

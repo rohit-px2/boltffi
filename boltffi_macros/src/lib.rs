@@ -92,7 +92,9 @@ pub fn data(attribute: TokenStream, item: TokenStream) -> TokenStream {
     }
     let mut parsed = syn::parse::<syn::Item>(item.clone()).ok();
     if let Some(parsed) = parsed.as_mut() {
-        if let Some(refused) = refuse_second_marker(lane::Kind::Data, &attribute, parsed) {
+        if let Some(refused) = refuse_export_item(lane::Kind::Data, parsed, &item)
+            .or_else(|| refuse_second_marker(lane::Kind::Data, &attribute, parsed))
+        {
             return refused;
         }
         if !cfg_eval::is_conditional(parsed)
@@ -160,6 +162,30 @@ fn transparent_newtype_impl(
             }
         }
     }
+}
+
+/// Refuses `#[data]` or `#[error]` on a function, trait or constant, which `#[export]` declares.
+fn refuse_export_item(
+    kind: lane::Kind,
+    parsed: &syn::Item,
+    item: &TokenStream,
+) -> Option<TokenStream> {
+    let noun = match parsed {
+        syn::Item::Fn(_) => "function",
+        syn::Item::Trait(_) => "trait",
+        syn::Item::Const(_) => "constant",
+        _ => return None,
+    };
+    let error = syn::Error::new(
+        proc_macro2::Span::call_site(),
+        format!(
+            "`#[{}]` declares a struct or enum; use `#[export]` on a {noun}",
+            kind.keyword()
+        ),
+    )
+    .to_compile_error();
+    let item = proc_macro2::TokenStream::from(strip_boltffi_attrs(item.clone()));
+    Some(quote! { #error #item }.into())
 }
 
 /// The BoltFFI markers that each declare what a struct or enum is.
@@ -240,7 +266,10 @@ fn type_marker(attr: &syn::Attribute) -> Option<&'static str> {
 pub fn error(attribute: TokenStream, item: TokenStream) -> TokenStream {
     syn::parse::<syn::Item>(item.clone())
         .ok()
-        .and_then(|mut parsed| refuse_second_marker(lane::Kind::Error, &attribute, &mut parsed))
+        .and_then(|mut parsed| {
+            refuse_export_item(lane::Kind::Error, &parsed, &item)
+                .or_else(|| refuse_second_marker(lane::Kind::Error, &attribute, &mut parsed))
+        })
         .unwrap_or_else(|| invocation(lane::Kind::Error, attribute, item))
 }
 

@@ -13,7 +13,7 @@ use boltffi_binding::{
     Bindings, Decl, EnumDecl, ExportedCallable, HandlePresence, IncomingParam, Native, RecordDecl,
     lower,
 };
-use boltffi_scan::{ScanInput, crate_scoped, scan_package};
+use boltffi_scan::{crate_scoped, scan_source};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
@@ -45,7 +45,6 @@ fn main() {
 }
 
 struct BuildPaths {
-    manifest: PathBuf,
     source: PathBuf,
     src: PathBuf,
     out: PathBuf,
@@ -83,12 +82,7 @@ impl BuildPaths {
         let source = manifest.join("src").join("lib.rs");
         let src = manifest.join("src");
         let out = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
-        Self {
-            manifest,
-            source,
-            src,
-            out,
-        }
+        Self { source, src, out }
     }
 }
 
@@ -1238,6 +1232,18 @@ static void boltffi_tests_async_make_callback(uint64_t handle, void (*callback)(
     callback(context, FFI_STATUS_OK, value_callback);
 }
 
+static int32_t boltffi_tests_closure_callback(
+    uint64_t handle,
+    int32_t (*call)(void *, int32_t),
+    void *context,
+    void (*release)(void *)
+) {
+    int32_t first = call(context, 10);
+    int32_t second = call(context, 20);
+    release(context);
+    return first * second + (int32_t)handle;
+}
+
 static int boltffi_tests_check_callbacks(void) {
     ___SyncValueCallbackVTable value_vtable = {
         boltffi_tests_callback_free,
@@ -1259,6 +1265,11 @@ static int boltffi_tests_check_callbacks(void) {
         boltffi_tests_callback_free,
         boltffi_tests_callback_clone,
         boltffi_tests_struct_callback
+    };
+    ___SyncClosureCallbackVTable closure_vtable = {
+        boltffi_tests_callback_free,
+        boltffi_tests_callback_clone,
+        boltffi_tests_closure_callback
     };
     ___SyncOptionCallbackVTable option_vtable = {
         boltffi_tests_callback_free,
@@ -1303,6 +1314,7 @@ static int boltffi_tests_check_callbacks(void) {
     boltffi_register_callback_13boltffi_tests15SyncVecCallback(&vec_vtable);
     boltffi_register_callback_13boltffi_tests18SyncStructCallback(&struct_vtable);
     boltffi_register_callback_13boltffi_tests18SyncOptionCallback(&option_vtable);
+    boltffi_register_callback_13boltffi_tests19SyncClosureCallback(&closure_vtable);
     boltffi_register_callback_13boltffi_tests16SyncEnumCallback(&enum_vtable);
     boltffi_register_callback_13boltffi_tests23SyncMultiMethodCallback(&multi_vtable);
     boltffi_register_callback_13boltffi_tests12AsyncFetcher(&async_fetch_vtable);
@@ -1315,6 +1327,11 @@ static int boltffi_tests_check_callbacks(void) {
     }
     if (boltffi_function_13boltffi_tests17invoke_sync_boxed(callback, 11) != 16) {
         return 712;
+    }
+    BoltFFICallbackHandle closure_callback =
+        boltffi_create_callback_13boltffi_tests19SyncClosureCallback(3);
+    if (boltffi_function_13boltffi_tests19invoke_sync_closure(closure_callback, 1) != 234) {
+        return 788;
     }
     BoltFFICallbackHandle provider = boltffi_create_callback_13boltffi_tests16SyncDataProvider(2);
     if (boltffi_function_13boltffi_tests17sum_provider_impl(provider) != 7.0) {
@@ -2998,11 +3015,7 @@ fn source_contract(paths: &BuildPaths) -> SourceContract {
         env::var("CARGO_PKG_NAME").expect("package name"),
         env::var("CARGO_PKG_VERSION").ok(),
     );
-    crate_scoped(
-        scan_package(&ScanInput::new(&paths.source, package).with_manifest_dir(&paths.manifest))
-            .expect("scan test package")
-            .root_with_support(),
-    )
+    crate_scoped(scan_source(&paths.source, package).expect("scan test package"))
 }
 
 fn rust_type_name(name: &boltffi_binding::CanonicalName) -> String {
